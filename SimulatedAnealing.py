@@ -14,7 +14,7 @@ class SimulatedAnnealing:
 
         self.x_length = x_length    # integer containing length of array x
         self.x_bounds = x_bounds    # tuple containing bounds to x
-        self.objective_function = objective_function
+        self.objective_function_raw = objective_function
         self.pertubation_method = pertubation_method
         self.annealing_schedule = annealing_schedule
         self.halt_definition = halt_definition
@@ -25,12 +25,13 @@ class SimulatedAnnealing:
         self.archive = []   # list of (x, objective value) tuples
         self.archive_maximum_length = maximum_archive_length
         self.archive_minimum_acceptable_dissimilarity = archive_minimum_acceptable_dissimilarity
-        self.archive_similar_dissimilarity = archive_minimum_acceptable_dissimilarity*0.1 # threshold for x values being considered as similar
+        self.archive_similar_dissimilarity = archive_minimum_acceptable_dissimilarity #*0.1 # threshold for x values being considered as similar
 
         # initialise parameters related to annealing schedule
         self.temperature_history = []
         self.Markov_chain_length = 0    # initialise to 0
         self.acceptances_count = 0  # initialise to 0
+        self.objective_function_evaluation_count = 0    # initialise to 0
 
         if pertubation_method == "simple":
             self.pertubation_fraction_of_range = kwargs['pertubation_fraction_of_range']
@@ -40,10 +41,16 @@ class SimulatedAnnealing:
 
         if halt_definition == "max_n_temperatures":
             self.temperature_maximum_iterations = kwargs['temperature_maximum_iterations']
+        elif halt_definition == "max_function_evaluations":
+            self.objective_function_evaluation_max_count = kwargs['maximum_function_evaluations']
         else:
             assert halt_definition == "by_improvement"
             # TODO write this
             pass
+
+    def objective_function(self, *args, **kwargs):
+        self.objective_function_evaluation_count += 1   # increment by one everytime objective function is called
+        return self.objective_function_raw(*args, **kwargs)
 
 
     def run(self):
@@ -99,7 +106,14 @@ class SimulatedAnnealing:
         if self.pertubation_method == "simple":
             D_max_change = (self.x_bounds[1] - self.x_bounds[0]) * self.pertubation_fraction_of_range
             u_random_sample = np.random.uniform(low=-1, high=1, size=self.x_length)
+            x_new = x + u_random_sample * D_max_change, self.x_bounds[0], self.x_bounds[1]
             return np.clip(x + u_random_sample*D_max_change, self.x_bounds[0], self.x_bounds[1])
+
+            # if max(x_new) > self.x_bounds[1] or min(x_new) < self.x_bounds[0]:
+            #     x_new = self.perturb_x(x)   # recursively call perturb until sampled within bounds
+            #     return x_new
+            # else:
+            #     return x_new
 
     def temperature_scheduler(self):
         if self.Markov_chain_length > self.markov_chain_maximum_length or \
@@ -109,15 +123,23 @@ class SimulatedAnnealing:
             if self.annealing_schedule == "simple_exponential_cooling":
                 self.temperature = self.temperature * self.alpha
                 self.temperature_history.append(self.temperature)
-            if self.halt_definition == "max_n_temperatures":
-                if len(self.temperature_history) > self.temperature_maximum_iterations:
-                    done = True     # stopping criteria has been met
-                else:
-                    done = False
-                return done
+            done = self.get_halt()
         else:   # no temperature change
             done = False
-            return done
+        return done
+
+    def get_halt(self):
+        if self.halt_definition == "max_n_temperatures":
+            if len(self.temperature_history) > self.temperature_maximum_iterations:
+                done = True  # stopping criteria has been met
+            else:
+                done = False
+        elif self.halt_definition == "max_function_evaluations":
+            if self.objective_function_evaluation_count > self.objective_function_evaluation_max_count:
+                done = True
+            else:
+                done = False
+        return done
 
     def update_archive(self, x_new, objective_new):
         function_archive = [f_archive for x_archive, f_archive in self.archive]
@@ -141,9 +163,23 @@ class SimulatedAnnealing:
 
 
 if __name__ == "__main__":
-    np.random.seed(0)
+    np.random.seed(2)
+    test = "rana"
+    if test == "rana":  # rana function
+        from rana import rana_func
+        x_max = 500
+        x_min = -x_max
+        rana_2d = SimulatedAnnealing(x_length=2, x_bounds=(x_min, x_max), objective_function=rana_func,
+                                           archive_minimum_acceptable_dissimilarity=1, maximum_markov_chain_length=100,
+                                           temperature_maximum_iterations=50, pertubation_fraction_of_range=0.1)
+        x_result, objective_result = rana_2d.run()
+        print(f"x_result = {x_result} \n objective_result = {objective_result} \n "
+              f"number of function evaluations = {rana_2d.objective_function_evaluation_count}")
 
-    test = 0
+        archive_x = np.array([x_archive for x_archive, f_archive in rana_2d.archive])
+        archive_f = np.array([f_archive for x_archive, f_archive in rana_2d.archive])
+
+
     if test == 0:  # simplest objective
         x_max = 50
         x_min = -x_max
