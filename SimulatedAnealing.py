@@ -127,7 +127,7 @@ class SimulatedAnnealing:
                 self.archive.append((x_new, objective_new))
             else:  # if archive is full
                 if objective_new < min(function_archive):
-                    self.archive[int(np.argmin(function_archive))] = (x_new, objective_new)  # replace worst solution
+                    self.archive[int(np.argmax(function_archive))] = (x_new, objective_new)  # replace worst solution
         else:    # new solution is close to another
             if objective_new < max(function_archive):
                 self.archive[int(np.argmin(dissimilarity))] = (x_new, objective_new)  # replace most similar value
@@ -145,12 +145,12 @@ if __name__ == "__main__":
 
     test = 0
     if test == 0:  # simplest objective
-        x_max =30
+        x_max = 50
         x_min = -x_max
         simple_objective = lambda x: x + np.sin(x)*20 + 3
         simple_anneal = SimulatedAnnealing(x_length=1, x_bounds=(x_min, x_max), objective_function=simple_objective,
                                            archive_minimum_acceptable_dissimilarity=1, maximum_markov_chain_length=50,
-                                           temperature_maximum_iterations=50, pertubation_fraction_of_range=0.1)
+                                           temperature_maximum_iterations=100, pertubation_fraction_of_range=0.1)
         x_result, objective_result = simple_anneal.run()
         print(f"x_result = {x_result} \n objective_result = {objective_result}")
 
@@ -158,7 +158,7 @@ if __name__ == "__main__":
         archive_f = np.array([f_archive for x_archive, f_archive in simple_anneal.archive])
 
         import matplotlib.pyplot as plt
-        x_linspace = np.linspace(x_min, x_max)
+        x_linspace = np.linspace(x_min, x_max, 200)
         plt.plot(x_linspace, simple_objective(x_linspace))
         plt.plot(x_result, objective_result, "or")
         plt.plot(archive_x, archive_f, "xr")
@@ -172,7 +172,7 @@ if __name__ == "__main__":
 
         import matplotlib.pyplot as plt
         import matplotlib as mpl
-        n = 10
+        n = 100
         x1_linspace = np.linspace(-10, 10, n)
         x2_linspace = np.linspace(-10, 10, n)
         z = np.zeros((n, n))
