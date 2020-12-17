@@ -1,30 +1,45 @@
 import numpy as np
 
 class SimulatedAnnealing:
+    """
+    Currently assumes:
+        - elements of x are all on the same scale
+    Notes:
+        Variable and function names written such that most of the code should be self-explanatory
+    """
     def __init__(self, x_length, x_bounds, objective_function, pertubation_method="simple",
-                 annealing_schedule="simple_exponential_cooling", halt_definition = "max_n_temperatures",
-                 maximum_markov_chain_length=10):
+                 annealing_schedule="simple_exponential_cooling", halt_definition="max_n_temperatures",
+                 maximum_markov_chain_length=10,
+                 maximum_archive_length=25, archive_minimum_acceptable_dissimilarity=0.1, **kwargs):
 
         self.x_length = x_length    # integer containing length of array x
         self.x_bounds = x_bounds    # tuple containing bounds to x
-        self.objective_function = objective_function        # TODO add function to class
+        self.objective_function = objective_function
         self.pertubation_method = pertubation_method
         self.annealing_schedule = annealing_schedule
         self.halt_definition = halt_definition
-        self.maximum_markov_chain_length = maximum_markov_chain_length
-        self.minimum_number_of_acceptances = round(0.6*maximum_markov_chain_length)   # 0.6 is a heuristic from lectures
+        self.markov_chain_maximum_length = maximum_markov_chain_length
+        self.acceptances_minimum_count = round(0.6 * maximum_markov_chain_length)   # 0.6 is a heuristic from lectures
 
+        # initialise archive and parameters determining how archive is managed
+        self.archive = []   # list of (x, objective value) tuples
+        self.archive_maximum_length = maximum_archive_length
+        self.archive_minimum_acceptable_dissimilarity = archive_minimum_acceptable_dissimilarity
+        self.archive_similar_dissimilarity = archive_minimum_acceptable_dissimilarity*0.1 # threshold for x values being considered as similar
 
-        self.archive = []   # TODO choose nice data structure
+        # initialise parameters related to annealing schedule
         self.temperature_history = []
         self.Markov_chain_length = 0    # initialise to 0
-        self.number_of_acceptances = 0  # initialise to 0
+        self.acceptances_count = 0  # initialise to 0
+
+        if pertubation_method == "simple":
+            self.pertubation_fraction_of_range = kwargs['pertubation_fraction_of_range']
 
         if annealing_schedule == "simple_exponential_cooling":
             self.alpha = 0.95   # alpha is a constant in this case
 
         if halt_definition == "max_n_temperatures":
-            self.max_n_temperatures = 10
+            self.temperature_maximum_iterations = kwargs['temperature_maximum_iterations']
         else:
             assert halt_definition == "by_improvement"
             # TODO write this
@@ -36,19 +51,21 @@ class SimulatedAnnealing:
         x_current = self.initialise_x()
         objective_current = self.objective_function(x_current)
         self.initialise_temperature(x_current, objective_current)
+        self.archive.append((x_current, objective_current))  # initialise archive
         done = False    # initialise, done = True when the optimisation has completed
         while done is False:
             x_new = self.perturb_x(x_current)
             objective_new = self.objective_function(x_new)
+            self.update_archive(x_new, objective_new)
             delta_objective = objective_new - objective_current
-            if delta_objective > 0 or np.exp(-delta_objective/self.temperature) > np.random.uniform(1):
+            if delta_objective < 0 or np.exp(-delta_objective/self.temperature) > np.random.uniform(low=0, high=1):
                 # accept change if there is an improvement, or probabilisticly (based on given temperature)
                 x_current = x_new
                 objective_current = objective_new
-                self.number_of_acceptances += 1
-                # TODO add code to update archive
+                self.acceptances_count += 1
             self.Markov_chain_length += 1
             done = self.temperature_scheduler()  # update temperature if need be
+
         return x_current, objective_current
 
 
@@ -80,27 +97,95 @@ class SimulatedAnnealing:
 
     def perturb_x(self, x):
         if self.pertubation_method == "simple":
-            D_max_change = (self.x_bounds[1] - self.x_bounds[0]) * 0.05  # 5% of the range?
+            D_max_change = (self.x_bounds[1] - self.x_bounds[0]) * self.pertubation_fraction_of_range
             u_random_sample = np.random.uniform(low=-1, high=1, size=self.x_length)
             return np.clip(x + u_random_sample*D_max_change, self.x_bounds[0], self.x_bounds[1])
 
     def temperature_scheduler(self):
-        if self.Markov_chain_length > self.maximum_markov_chain_length or \
-                self.number_of_acceptances > self.minimum_number_of_acceptances:
+        if self.Markov_chain_length > self.markov_chain_maximum_length or \
+                self.acceptances_count > self.acceptances_minimum_count:
             self.Markov_chain_length = 0    # restart counter
-            self.number_of_acceptances = 0  # restart counter
+            self.acceptances_count = 0  # restart counter
             if self.annealing_schedule == "simple_exponential_cooling":
                 self.temperature = self.temperature * self.alpha
+                self.temperature_history.append(self.temperature)
             if self.halt_definition == "max_n_temperatures":
-                if len(self.temperature_history) > self.max_n_temperatures:
+                if len(self.temperature_history) > self.temperature_maximum_iterations:
                     done = True     # stopping criteria has been met
                 else:
                     done = False
                 return done
+        else:   # no temperature change
+            done = False
+            return done
+
+    def update_archive(self, x_new, objective_new):
+        function_archive = [f_archive for x_archive, f_archive in self.archive]
+        dissimilarity = [np.sqrt((x_archive - x_new).T @ (x_archive - x_new)) for x_archive, f_archive in self.archive]
+        if max(dissimilarity) > self.archive_minimum_acceptable_dissimilarity:
+            if len(self.archive) < self.archive_maximum_length:  # archive not full
+                self.archive.append((x_new, objective_new))
+            else:  # if archive is full
+                if objective_new < min(function_archive):
+                    self.archive[int(np.argmin(function_archive))] = (x_new, objective_new)  # replace worst solution
+        else:    # new solution is close to another
+            if objective_new < max(function_archive):
+                self.archive[int(np.argmin(dissimilarity))] = (x_new, objective_new)  # replace most similar value
+            else:
+                similar_and_better = np.array([dissimilarity[i] < self.archive_similar_dissimilarity and \
+                                      function_archive[i] > objective_new
+                                      for i in range(len(self.archive))])
+                if True in similar_and_better:
+                    self.archive[np.where(similar_and_better == True)[0]] = (x_new, objective_new)
+
 
 
 if __name__ == "__main__":
-    simple_objective = lambda x: x**2
-    simple_anneal = SimulatedAnnealing(x_length=1, x_bounds=(-10, 10), objective_function=simple_objective)
-    simple_anneal.run()
+    np.random.seed(0)
+
+    test = 0
+    if test == 0:  # simplest objective
+        x_max =30
+        x_min = -x_max
+        simple_objective = lambda x: x + np.sin(x)*20 + 3
+        simple_anneal = SimulatedAnnealing(x_length=1, x_bounds=(x_min, x_max), objective_function=simple_objective,
+                                           archive_minimum_acceptable_dissimilarity=1, maximum_markov_chain_length=50,
+                                           temperature_maximum_iterations=50, pertubation_fraction_of_range=0.1)
+        x_result, objective_result = simple_anneal.run()
+        print(f"x_result = {x_result} \n objective_result = {objective_result}")
+
+        archive_x = np.array([x_archive for x_archive, f_archive in simple_anneal.archive])
+        archive_f = np.array([f_archive for x_archive, f_archive in simple_anneal.archive])
+
+        import matplotlib.pyplot as plt
+        x_linspace = np.linspace(x_min, x_max)
+        plt.plot(x_linspace, simple_objective(x_linspace))
+        plt.plot(x_result, objective_result, "or")
+        plt.plot(archive_x, archive_f, "xr")
+        plt.show()
+
+    if test == 1:
+        simple_objective = lambda x: x[0]**2 + np.sin(x[1])
+        simple_anneal = SimulatedAnnealing(x_length=2, x_bounds=(-10, 10), objective_function=simple_objective)
+        x_result, objective_result = simple_anneal.run()
+        print(f"x_result = {x_result} \n objective_result = {objective_result}")
+
+        import matplotlib.pyplot as plt
+        import matplotlib as mpl
+        n = 10
+        x1_linspace = np.linspace(-10, 10, n)
+        x2_linspace = np.linspace(-10, 10, n)
+        z = np.zeros((n, n))
+        for i, x1_val in enumerate(x1_linspace):
+            for j, x2_val in enumerate(x2_linspace):
+                z[i, j] = simple_objective(np.array([x1_val, x2_val]))
+        x1, x2 = np.meshgrid(x1_linspace, x2_linspace)
+        fig = plt.figure(figsize=(20, 10))
+        ax = fig.add_subplot(111, projection='3d')
+        ax.plot_trisurf(x1.flatten(), x2.flatten(), z.flatten(), cmap=mpl.cm.jet)
+        ax.plot(x_result[0], x_result[1], objective_result, "or")
+        ax.set_xlabel("variable 1")
+        ax.set_ylabel("variable 2")
+        ax.set_zlabel("cost")
+        fig.show()
 
