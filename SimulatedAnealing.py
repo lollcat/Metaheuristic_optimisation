@@ -27,6 +27,7 @@ class SimulatedAnnealing:
         self.archive_minimum_acceptable_dissimilarity = archive_minimum_acceptable_dissimilarity
         self.archive_similar_dissimilarity = archive_minimum_acceptable_dissimilarity #*0.1 # threshold for x values being considered as similar
 
+        self.objective_history = []
         # initialise parameters related to annealing schedule
         self.temperature_history = []
         self.Markov_chain_length = 0    # initialise to 0
@@ -50,7 +51,8 @@ class SimulatedAnnealing:
 
     def objective_function(self, *args, **kwargs):
         self.objective_function_evaluation_count += 1   # increment by one everytime objective function is called
-        return self.objective_function_raw(*args, **kwargs)
+        result = self.objective_function_raw(*args, **kwargs)
+        return result
 
 
     def run(self):
@@ -69,6 +71,7 @@ class SimulatedAnnealing:
                 # accept change if there is an improvement, or probabilisticly (based on given temperature)
                 x_current = x_new
                 objective_current = objective_new
+                self.objective_history.append(objective_current)
                 self.acceptances_count += 1
             self.Markov_chain_length += 1
             done = self.temperature_scheduler()  # update temperature if need be
@@ -106,8 +109,8 @@ class SimulatedAnnealing:
         if self.pertubation_method == "simple":
             D_max_change = (self.x_bounds[1] - self.x_bounds[0]) * self.pertubation_fraction_of_range
             u_random_sample = np.random.uniform(low=-1, high=1, size=self.x_length)
-            x_new = x + u_random_sample * D_max_change, self.x_bounds[0], self.x_bounds[1]
-            return np.clip(x + u_random_sample*D_max_change, self.x_bounds[0], self.x_bounds[1])
+            x_new = x + u_random_sample * D_max_change
+            return np.clip(x_new, self.x_bounds[0], self.x_bounds[1])
 
             # if max(x_new) > self.x_bounds[1] or min(x_new) < self.x_bounds[0]:
             #     x_new = self.perturb_x(x)   # recursively call perturb until sampled within bounds
@@ -144,34 +147,34 @@ class SimulatedAnnealing:
     def update_archive(self, x_new, objective_new):
         function_archive = [f_archive for x_archive, f_archive in self.archive]
         dissimilarity = [np.sqrt((x_archive - x_new).T @ (x_archive - x_new)) for x_archive, f_archive in self.archive]
-        if max(dissimilarity) > self.archive_minimum_acceptable_dissimilarity:
+        if min(dissimilarity) > self.archive_minimum_acceptable_dissimilarity:
             if len(self.archive) < self.archive_maximum_length:  # archive not full
                 self.archive.append((x_new, objective_new))
             else:  # if archive is full
                 if objective_new < min(function_archive):
                     self.archive[int(np.argmax(function_archive))] = (x_new, objective_new)  # replace worst solution
         else:    # new solution is close to another
-            if objective_new < max(function_archive):
+            if objective_new < min(function_archive):
                 self.archive[int(np.argmin(dissimilarity))] = (x_new, objective_new)  # replace most similar value
             else:
                 similar_and_better = np.array([dissimilarity[i] < self.archive_similar_dissimilarity and \
                                       function_archive[i] > objective_new
                                       for i in range(len(self.archive))])
                 if True in similar_and_better:
-                    self.archive[np.where(similar_and_better == True)[0]] = (x_new, objective_new)
+                    self.archive[np.where(similar_and_better == True)[0][0]] = (x_new, objective_new)
 
 
 
 if __name__ == "__main__":
-    np.random.seed(2)
-    test = "rana"
+    np.random.seed(0)
+    test = 0  # "rana"
     if test == "rana":  # rana function
         from rana import rana_func
         x_max = 500
         x_min = -x_max
         rana_2d = SimulatedAnnealing(x_length=2, x_bounds=(x_min, x_max), objective_function=rana_func,
-                                           archive_minimum_acceptable_dissimilarity=1, maximum_markov_chain_length=100,
-                                           temperature_maximum_iterations=50, pertubation_fraction_of_range=0.1)
+                                           archive_minimum_acceptable_dissimilarity=1, maximum_markov_chain_length=50,
+                                           temperature_maximum_iterations=200, pertubation_fraction_of_range=0.1)
         x_result, objective_result = rana_2d.run()
         print(f"x_result = {x_result} \n objective_result = {objective_result} \n "
               f"number of function evaluations = {rana_2d.objective_function_evaluation_count}")
@@ -179,14 +182,13 @@ if __name__ == "__main__":
         archive_x = np.array([x_archive for x_archive, f_archive in rana_2d.archive])
         archive_f = np.array([f_archive for x_archive, f_archive in rana_2d.archive])
 
-
-    if test == 0:  # simplest objective
+    if test == 0:   # simplest objective
         x_max = 50
         x_min = -x_max
         simple_objective = lambda x: x + np.sin(x)*20 + 3
         simple_anneal = SimulatedAnnealing(x_length=1, x_bounds=(x_min, x_max), objective_function=simple_objective,
-                                           archive_minimum_acceptable_dissimilarity=1, maximum_markov_chain_length=50,
-                                           temperature_maximum_iterations=100, pertubation_fraction_of_range=0.1)
+                                           archive_minimum_acceptable_dissimilarity=5, maximum_markov_chain_length=50,
+                                           temperature_maximum_iterations=500, pertubation_fraction_of_range=0.1)
         x_result, objective_result = simple_anneal.run()
         print(f"x_result = {x_result} \n objective_result = {objective_result}")
 
@@ -200,9 +202,13 @@ if __name__ == "__main__":
         plt.plot(archive_x, archive_f, "xr")
         plt.show()
 
+        plt.plot(simple_anneal.objective_history)
+        plt.show()
+
     if test == 1:
         simple_objective = lambda x: x[0]**2 + np.sin(x[1])
-        simple_anneal = SimulatedAnnealing(x_length=2, x_bounds=(-10, 10), objective_function=simple_objective)
+        simple_anneal = SimulatedAnnealing(x_length=2, x_bounds=(-10, 10), objective_function=simple_objective,
+                                           archive_minimum_acceptable_dissimilarity=3)
         x_result, objective_result = simple_anneal.run()
         print(f"x_result = {x_result} \n objective_result = {objective_result}")
 
@@ -224,4 +230,6 @@ if __name__ == "__main__":
         ax.set_ylabel("variable 2")
         ax.set_zlabel("cost")
         fig.show()
+
+
 
