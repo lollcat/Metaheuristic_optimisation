@@ -7,10 +7,11 @@ class SimulatedAnnealing:
     Notes:
         Variable and function names written such that most of the code should be self-explanatory
     """
-    def __init__(self, x_length, x_bounds, objective_function, pertubation_method="simple",
+    def __init__(self, x_length, x_bounds, objective_function, archive_minimum_acceptable_dissimilarity,
+                 pertubation_method="simple",
                  annealing_schedule="simple_exponential_cooling", halt_definition="max_n_temperatures",
                  maximum_markov_chain_length=10,
-                 maximum_archive_length=25, archive_minimum_acceptable_dissimilarity=0.1, **kwargs):
+                 maximum_archive_length=25,  **kwargs):
 
         self.x_length = x_length    # integer containing length of array x
         self.x_bounds = x_bounds    # tuple containing bounds to x
@@ -173,8 +174,9 @@ if __name__ == "__main__":
         x_max = 500
         x_min = -x_max
         rana_2d = SimulatedAnnealing(x_length=2, x_bounds=(x_min, x_max), objective_function=rana_func,
-                                           archive_minimum_acceptable_dissimilarity=1, maximum_markov_chain_length=50,
-                                           temperature_maximum_iterations=200, pertubation_fraction_of_range=0.1)
+                                     maximum_archive_length=50,
+                                     archive_minimum_acceptable_dissimilarity=20, maximum_markov_chain_length=50,
+                                     temperature_maximum_iterations=200, pertubation_fraction_of_range=0.1)
         x_result, objective_result = rana_2d.run()
         print(f"x_result = {x_result} \n objective_result = {objective_result} \n "
               f"number of function evaluations = {rana_2d.objective_function_evaluation_count}")

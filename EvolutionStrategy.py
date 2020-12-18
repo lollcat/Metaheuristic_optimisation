@@ -1,12 +1,13 @@
 import numpy as np
 
 
-class GeneticAlgorithm:
-    def __init__(self, x_length, x_bounds, objective_function,
+class EvolutionStrategy:
+    def __init__(self, x_length, x_bounds, objective_function, archive_minimum_acceptable_dissimilarity,
                  parent_number=10,
                  selection_method="standard_mew_comma_lambda", mutation_method = "simple",
                  recombination_method="global",
                  termination_min_abs_difference=1e-3,
+                 maximum_archive_length=30, objective_count_maximum=10000,
                  **kwargs):
         self.x_length = x_length
         self.x_bounds = x_bounds
@@ -33,6 +34,15 @@ class GeneticAlgorithm:
         self.offspring_objectives = np.zeros(self.offspring_number)
 
         self.objective_function_evaluation_count = 0  # initialise
+        self.objective_count_maximum = objective_count_maximum
+
+
+        # initialise archive and parameters determining how archive is managed
+        self.archive = []   # list of (x, objective value) tuples
+        self.archive_maximum_length = maximum_archive_length
+        self.archive_minimum_acceptable_dissimilarity = archive_minimum_acceptable_dissimilarity
+        self.archive_similar_dissimilarity = archive_minimum_acceptable_dissimilarity
+        self.objective_history = []
 
     def objective_function(self, *args, **kwargs):
         self.objective_function_evaluation_count += 1   # increment by one everytime objective function is called
@@ -42,9 +52,12 @@ class GeneticAlgorithm:
         self.initialise_random_population()
         while True:  # loop until termination criteria is reached
             self.select_parents()
-
+            for x, objective in zip(self.parents, self.parent_objectives):  # update archive
+                self.update_archive(x, objective)
+                self.objective_history.append(objective)
             # termination criteria
-            if max(self.parent_objectives) - min(self.parent_objectives) < self.termination_min_abs_difference:
+            if max(self.parent_objectives) - min(self.parent_objectives) < self.termination_min_abs_difference \
+                    or self.objective_function_evaluation_count > self.objective_count_maximum:
                 break
 
             self.create_new_offspring()
@@ -53,7 +66,7 @@ class GeneticAlgorithm:
 
     def initialise_random_population(self):
         self.offspring = np.random.uniform(low=self.x_bounds[0], high=self.x_bounds[1], size=(self.offspring_number, self.x_length))
-        self.offspring_objectives = np.apply_along_axis(func1d=self.objective_function, arr=self.offspring, axis=1)
+        self.offspring_objectives = np.squeeze(np.apply_along_axis(func1d=self.objective_function, arr=self.offspring, axis=1))
         if self.selection_method == "elitist":  # require pool including parents for select_parents function in this case
             self.parents = np.random.uniform(low=self.x_bounds[0], high=self.x_bounds[1],
                                                size=(self.parent_number, self.x_length))
@@ -62,7 +75,7 @@ class GeneticAlgorithm:
     def select_parents(self):
         if self.selection_method == "standard_mew_comma_lambda":
             # choose top values in linear time (np.argpartition doesn't sort top values amongst themselves)
-            parent_indxs = np.argpartition(self.offspring_objectives, -self.parent_number)[-self.parent_number:]
+            parent_indxs = np.argpartition(self.offspring_objectives, self.parent_number)[:self.parent_number]
             self.parents = self.offspring[parent_indxs, :]
             self.parent_objectives = self.offspring_objectives[parent_indxs]
 
@@ -81,9 +94,11 @@ class GeneticAlgorithm:
                                                size=offspring_pre_mutation.shape)
             x_new = offspring_pre_mutation + u_random_sample
             self.offspring = np.clip(x_new, self.x_bounds[0], self.x_bounds[1])
-            self.offspring_objectives = np.apply_along_axis(func1d=self.objective_function, arr=self.offspring, axis=1)
+            self.offspring_objectives = np.squeeze(np.apply_along_axis(func1d=self.objective_function, arr=self.offspring, axis=1))
 
     def update_archive(self, x_new, objective_new):
+        if len(self.archive) == 0:  # if empty then initialise with the first value
+            self.archive.append((x_new, objective_new))
         function_archive = [f_archive for x_archive, f_archive in self.archive]
         dissimilarity = [np.sqrt((x_archive - x_new).T @ (x_archive - x_new)) for x_archive, f_archive in self.archive]
         if min(dissimilarity) > self.archive_minimum_acceptable_dissimilarity:
@@ -106,40 +121,39 @@ class GeneticAlgorithm:
 
 if __name__ == "__main__":
     np.random.seed(0)
-    test = 1
+    test = "rana"
+    import matplotlib.pyplot as plt
 
     if test == "rana":  # rana function
         from rana import rana_func
         x_max = 500
         x_min = -x_max
-        rana_2d = GeneticAlgorithm(x_length=2, x_bounds=(x_min, x_max), objective_function=rana_func,
-                                   standard_deviation_fraction_of_range=0.05)
+        rana_2d = EvolutionStrategy(x_length=2, x_bounds=(x_min, x_max), objective_function=rana_func,
+                                    standard_deviation_fraction_of_range=0.001,
+                                    archive_minimum_acceptable_dissimilarity=20)
         x_result, objective_result = rana_2d.run()
+        plt.plot(rana_2d.objective_history)
+        plt.show()
 
-    if test == 1:
-        simple_objective = lambda x: x[0]**2 + np.sin(x[1])
-        x_max = 10
+    if test == 0:   # simplest objective
+        x_max = 50
         x_min = -x_max
-        simple_evolve = GeneticAlgorithm(x_length=2, x_bounds=(x_min, x_max), objective_function=simple_objective,
-                                   standard_deviation_fraction_of_range=0.05)
+        simple_objective = lambda x: x + np.sin(x)*20 + 3
+        simple_evolve = EvolutionStrategy(x_length=1, x_bounds=(x_min, x_max), objective_function=simple_objective,
+                                          standard_deviation_fraction_of_range=0.05,
+                                          archive_minimum_acceptable_dissimilarity=5)
         x_result, objective_result = simple_evolve.run()
         print(f"x_result = {x_result} \n objective_result = {objective_result}")
 
-        import matplotlib.pyplot as plt
-        import matplotlib as mpl
-        n = 100
-        x1_linspace = np.linspace(-10, 10, n)
-        x2_linspace = np.linspace(-10, 10, n)
-        z = np.zeros((n, n))
-        for i, x1_val in enumerate(x1_linspace):
-            for j, x2_val in enumerate(x2_linspace):
-                z[i, j] = simple_objective(np.array([x1_val, x2_val]))
-        x1, x2 = np.meshgrid(x1_linspace, x2_linspace)
-        fig = plt.figure(figsize=(20, 10))
-        ax = fig.add_subplot(111, projection='3d')
-        ax.plot_trisurf(x1.flatten(), x2.flatten(), z.flatten(), cmap=mpl.cm.jet)
-        ax.plot(x_result[0], x_result[1], objective_result, "or")
-        ax.set_xlabel("variable 1")
-        ax.set_ylabel("variable 2")
-        ax.set_zlabel("cost")
-        fig.show()
+        archive_x = np.array([x_archive for x_archive, f_archive in simple_evolve.archive])
+        archive_f = np.array([f_archive for x_archive, f_archive in simple_evolve.archive])
+
+
+        x_linspace = np.linspace(x_min, x_max, 200)
+        plt.plot(x_linspace, simple_objective(x_linspace))
+        plt.plot(x_result, objective_result, "or")
+        plt.plot(archive_x, archive_f, "xr")
+        plt.show()
+
+        plt.plot(simple_evolve.objective_history)
+        plt.show()
