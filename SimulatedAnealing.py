@@ -105,6 +105,7 @@ class SimulatedAnnealing:
             self.Markov_chain_length += 1
             self.iterations_total += 1
             done = self.temperature_scheduler()  # update temperature if need be
+            x_current = self.asses_restart(x_current)
 
         return np.interp(x_current, [-1, 1], self.x_bounds), objective_current
 
@@ -144,7 +145,7 @@ class SimulatedAnnealing:
 
     def is_positive_definate(self, matrix):
         try:
-            np.linalg.cholesky(self.step_size_control_matrix)
+            np.linalg.cholesky(matrix)
             return True
         except:
             return False
@@ -197,6 +198,18 @@ class SimulatedAnnealing:
         # else:
         #     return x_new
         return np.clip(x_new, -1, 1)
+
+    def asses_restart(self, x, min_difference = 0.01):
+        # lets assume roughly to asses restart over the length of half a markov chain max length
+        if len(self.objective_history) % int(self.markov_chain_maximum_length/2) == 0 and \
+            len(self.objective_history) > self.markov_chain_maximum_length:
+            if max(self.objective_history[-50:]) - min(self.objective_history[-50:]) < min_difference:
+                # then rebase from best archive solution
+                x_restart = self.archive_x[np.argmax(self.archive_f), :]
+                print("restarted")
+                return x_restart
+        else:
+            return x
 
 
     def temperature_scheduler(self):
@@ -261,6 +274,7 @@ class SimulatedAnnealing:
     def archive_x(self):
         return np.interp(np.array([x_archive for x_archive, f_archive in self.archive]), [-1, 1], self.x_bounds)
 
+    @property
     def archive_f(self):
         return np.array([f_archive for x_archive, f_archive in self.archive])
 
