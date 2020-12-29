@@ -3,18 +3,22 @@ import numpy as np
 class SimulatedAnnealing:
     """
     Currently assumes:
+        - interpolation is done inside objective_function wrapper function, elsewhere in the class x is
+        bounded between -1 and 1
         - elements of x are all on the same scale
     Notes:
         Variable and function names written such that most of the code should be self-explanatory
     """
-    def __init__(self, x_length, x_bounds, objective_function, archive_minimum_acceptable_dissimilarity,
+    def __init__(self, x_length, x_bounds, objective_function,
                  pertubation_method="simple",
                  annealing_schedule="simple_exponential_cooling", halt_definition="max_function_evaluations",
+                 archive_minimum_acceptable_dissimilarity=0.1,
                  maximum_markov_chain_length=10,
                  maximum_archive_length=25, step_size_initialisation_fraction_of_range=0.1,  **kwargs):
 
         self.x_length = x_length    # integer containing length of array x
         self.x_bounds = x_bounds    # tuple containing bounds to x
+        self.x_range = 2    # when not interpolated (i.e. x bounded by -1 and 1)
         self.objective_function_raw = objective_function
         self.pertubation_method = pertubation_method
         self.annealing_schedule = annealing_schedule
@@ -39,21 +43,18 @@ class SimulatedAnnealing:
         self.probability_of_acceptance_history = []
 
         if pertubation_method == "simple":  # step size just a constant in this case
-            self.step_size_matrix = (self.x_bounds[1] - self.x_bounds[0]) * \
-                                    step_size_initialisation_fraction_of_range
+            self.step_size_matrix = 2*step_size_initialisation_fraction_of_range
             # stays at initialisation in simple pertubation method
         elif pertubation_method == "Cholesky" or "Diagonal":
             self.pertubation_alpha = 0.1
             self.pertubation_omega = 2.1
             if pertubation_method == "Cholesky":
                 self.step_size_control_matrix = (np.eye(x_length) *
-                                                step_size_initialisation_fraction_of_range *
-                                                (self.x_bounds[1] - self.x_bounds[0]))**2 # squared to cancel decomposition
+                                                step_size_initialisation_fraction_of_range*self.x_range)**2 # squared to cancel decomposition
                 # initialise, this is the matrix that gets decomposed
             else:
                 self.step_size_matrix = np.eye(x_length) * \
-                                                step_size_initialisation_fraction_of_range * \
-                                                (self.x_bounds[1] - self.x_bounds[0])     # initialise, this matrix controls step size
+                                                step_size_initialisation_fraction_of_range * self.x_range     # initialise, this matrix controls step size
 
 
         if annealing_schedule == "simple_exponential_cooling":
@@ -70,9 +71,11 @@ class SimulatedAnnealing:
             # TODO write this
             pass
 
-    def objective_function(self, *args, **kwargs):
+    def objective_function(self, x):
+        # interpolation done here to pass the objective function x correctly interpolated
         self.objective_function_evaluation_count += 1   # increment by one everytime objective function is called
-        result = self.objective_function_raw(*args, **kwargs)
+        x_interp = np.interp(x, [-1, 1], self.x_bounds)
+        result = self.objective_function_raw(x_interp)
         return result
 
 
@@ -103,7 +106,7 @@ class SimulatedAnnealing:
             self.iterations_total += 1
             done = self.temperature_scheduler()  # update temperature if need be
 
-        return x_current, objective_current
+        return np.interp(x_current, [-1, 1], self.x_bounds), objective_current
 
     def accept_x_update(self, delta_objective, delta_x):
         if self.pertubation_method == "Diagonal":
@@ -118,7 +121,7 @@ class SimulatedAnnealing:
 
     def initialise_x(self):
         # initialise x randomly within the given bounds
-        return np.random.uniform(low=self.x_bounds[0], high=self.x_bounds[1], size=self.x_length)
+        return np.random.uniform(low=-1, high=1, size=self.x_length)
 
     def initialise_temperature(self, x_current, objective_current, n_steps=10, average_accept_probability=0.8):
         """
@@ -139,29 +142,37 @@ class SimulatedAnnealing:
         self.temperature = initial_temperature
         self.temperature_history.append([self.temperature, self.acceptances_total_count, self.objective_function_evaluation_count])
 
+    def is_positive_definate(self, matrix):
+        try:
+            np.linalg.cholesky(self.step_size_control_matrix)
+            return True
+        except:
+            return False
+
     def update_step_size(self, x_new, x_old):
         if self.pertubation_method == "simple":
             return
         elif self.pertubation_method == "Cholesky":
+            clipping_fraction_of_range = 0.5
             covariance = np.cov([x_new, x_old], rowvar=False)
             self.step_size_control_matrix = (1 - self.pertubation_alpha) * self.step_size_control_matrix + \
                                             self.pertubation_alpha * self.pertubation_omega * covariance
             self.step_size_control_matrix = np.clip(self.step_size_control_matrix,
-                                                    (self.x_bounds[1] - self.x_bounds[0]),
-                                                    (self.x_bounds[1] - self.x_bounds[0]))
+                                                    -self.x_range*clipping_fraction_of_range,
+                                                    self.x_range*clipping_fraction_of_range)
             i = 0
-            while not np.all(np.linalg.eigvals(self.step_size_control_matrix) > 0):
+            while not self.is_positive_definate(self.step_size_control_matrix): #np.min(np.linalg.eigvals(self.step_size_control_matrix)) > 1e-16:
                 i += 1
-                self.step_size_control_matrix += np.eye(self.x_length)*1e-16*10**i  # to make positive definate
-                if i > 10:
+                self.step_size_control_matrix += np.eye(self.x_length)*1e-16*1000**i  # to make positive definate
+                if i > 3:
                     raise Exception("couldn't get positive definate step size control matrix")
 
         elif self.pertubation_method == "Diagonal":
             clipping_fraction_of_range = 0.5
             self.step_size_matrix = (1-self.pertubation_alpha)*self.step_size_matrix + \
                                    np.diag(self.pertubation_alpha*self.pertubation_omega*np.abs(x_new - x_old))
-            self.step_size_matrix = np.clip(self.step_size_matrix, (self.x_bounds[1] - self.x_bounds[0])*1e-16,
-                                            (self.x_bounds[1] - self.x_bounds[0])*clipping_fraction_of_range)  # clip stepsize to not be too large
+            self.step_size_matrix = np.clip(self.step_size_matrix, self.x_range*1e-16,
+                                            self.x_range*clipping_fraction_of_range)  # clip stepsize to not be too large
             # noise sampled in both directions so can clip step size matrix to be bounded by just over 0
             # instead of big negative and big positve numbers - this prevents any step size from going to 0 or becoming
             # too large
@@ -180,12 +191,12 @@ class SimulatedAnnealing:
             u_random_sample = np.random.uniform(low=-1, high=1, size=self.x_length)
             x_new = x+self.step_size_matrix@u_random_sample
 
-        # if max(x_new) > self.x_bounds[1] or min(x_new) < self.x_bounds[0]:
+        # if max(x_new) > 1 or min(x_new) < -1:
         #     x_new = self.perturb_x(x)   # recursively call perturb until sampled within bounds
         #     return x_new
         # else:
         #     return x_new
-        return np.clip(x_new, self.x_bounds[0], self.x_bounds[1])
+        return np.clip(x_new, -1, 1)
 
 
     def temperature_scheduler(self):
@@ -197,11 +208,9 @@ class SimulatedAnnealing:
                 if len(self.current_temperature_accepted_objective_values) == 1:
                     self.alpha = 0.5
                 else:
-                    #latest_temperature_standard_dev = np.std(self.current_temperature_accepted_objective_values)
-                    latest_temperature_coefficient_of_variation = np.std(self.current_temperature_accepted_objective_values)/\
-                                                                  np.abs(np.mean(self.current_temperature_accepted_objective_values))
-                    #self.alpha = np.max([0.5, np.exp(-0.7*self.temperature/latest_temperature_standard_dev)])
-                    self.alpha = np.max([0.5, np.exp(-0.7*self.temperature/latest_temperature_coefficient_of_variation)])
+                    latest_temperature_standard_dev = np.std(self.current_temperature_accepted_objective_values)
+                    self.alpha = np.max([0.5, np.exp(-0.7*self.temperature/latest_temperature_standard_dev)])
+
                 self.temperature = self.temperature * self.alpha
                 self.current_temperature_accepted_objective_values = []     # reset
             self.temperature_history.append([self.temperature, self.acceptances_total_count, self.objective_function_evaluation_count])
@@ -244,6 +253,23 @@ class SimulatedAnnealing:
                 if True in similar_and_better:
                     self.archive[np.where(similar_and_better == True)[0][0]] = (x_new, objective_new)
 
+    @property
+    def temperature_history_array(self):
+        return np.array(self.temperature_history)
+
+    @property
+    def archive_x(self):
+        return np.interp(np.array([x_archive for x_archive, f_archive in self.archive]), [-1, 1], self.x_bounds)
+
+    def archive_f(self):
+        return np.array([f_archive for x_archive, f_archive in self.archive])
+
+    @property
+    def objective_history_array(self):
+        return self.objective_history
+
+
+
 
 
 if __name__ == "__main__":
@@ -270,21 +296,19 @@ if __name__ == "__main__":
         from rana import rana_func
 
         random_seed = 0
+        maximum_markov_chain_length = 50
         x_length = 5
+        np.random.seed(random_seed)
         np.random.seed(random_seed)
         x_max = 500
         x_min = -x_max
         rana_2d_chol = SimulatedAnnealing(x_length=x_length, x_bounds=(x_min, x_max), objective_function=rana_func,
-                                          pertubation_method="Cholesky", step_size_initialisation_fraction_of_range=0.1,
-                                          maximum_archive_length=100, annealing_schedule="adaptive_cooling",
-                                          archive_minimum_acceptable_dissimilarity=60, maximum_markov_chain_length=50,
+                                          pertubation_method="Cholesky", maximum_archive_length=100,
+                                          maximum_markov_chain_length=maximum_markov_chain_length,
                                           maximum_function_evaluations=10000)
         x_result_chol, objective_result_chol = rana_2d_chol.run()
         print(f"x_result = {x_result_chol} \n objective_result = {objective_result_chol} \n "
               f"number of function evaluations = {rana_2d_chol.objective_function_evaluation_count}")
-
-        archive_x_chol = np.array([x_archive for x_archive, f_archive in rana_2d_chol.archive])
-        archive_f_chol = np.array([f_archive for x_archive, f_archive in rana_2d_chol.archive])
 
     if test == "adaptive_cooling":
         from rana import rana_func
