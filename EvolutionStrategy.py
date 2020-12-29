@@ -8,6 +8,7 @@ class EvolutionStrategy:
                  recombination_method="global",
                  termination_min_abs_difference=1e-3,
                  maximum_archive_length=30, objective_count_maximum=10000,
+                 mutation_covariance_initialisation_fraction_of_range=0.1,
                  **kwargs):
         self.x_length = x_length
         self.x_bounds = x_bounds
@@ -22,8 +23,12 @@ class EvolutionStrategy:
             self.mutation_tau = 1/np.sqrt(2*np.sqrt(x_length))
             self.mutation_tau_dash = 1/np.sqrt(2*x_length)
             self.mutation_Beta = 0.0873
+            self.mutation_standard_deviations = np.ones(x_length) * \
+                                                mutation_covariance_initialisation_fraction_of_range * (x_bounds[1] - x_bounds[0])
+
+            self.rotation_matrix = np.zeros(x_length, x_length)
         elif mutation_method == "simple":
-            self.standard_deviation_simple = kwargs["standard_deviation_fraction_of_range"]*(x_bounds[1] - x_bounds[0])
+            self.standard_deviation_simple = mutation_covariance_initialisation_fraction_of_range*(x_bounds[1] - x_bounds[0])
 
         self.parent_number = parent_number
         self.offspring_number = parent_number * 7  # parent to offspring ratio from slides (Schwefel 1987)
@@ -75,10 +80,21 @@ class EvolutionStrategy:
     def select_parents(self):
         if self.selection_method == "standard_mew_comma_lambda":
             # choose top values in linear time (np.argpartition doesn't sort top values amongst themselves)
-            parent_indxs = np.argpartition(self.offspring_objectives, self.parent_number)[:self.parent_number]
-            self.parents = self.offspring[parent_indxs, :]
-            self.parent_objectives = self.offspring_objectives[parent_indxs]
+            new_parent_indxs = np.argpartition(self.offspring_objectives, self.parent_number)[:self.parent_number]
+            self.parents = self.offspring[new_parent_indxs, :]
+            self.parent_objectives = self.offspring_objectives[new_parent_indxs]
+        elif self.selection_method == "standard_mew_plus_lambda":
+            # create pool selcted from
+            pool_objectives = np.zeros(self.parent_number + self.offspring_number)
+            pool_objectives[0:self.offspring_number] = self.offspring_objectives
+            pool_objectives[self.offspring_number:] = self.parent_objectives
+            pool = np.zeros(self.offspring_number + self.parent_objectives, self.x_length)
+            pool[0:self.offspring_number, :] = self.offspring
+            pool[self.offspring_number:, :] = self.parents
 
+            new_parent_indxs = np.argpartition(pool_objectives, self.parent_number)[:self.parent_number]
+            self.parents = self.offspring[new_parent_indxs, :]
+            self.parent_objectives = pool_objectives[new_parent_indxs]
 
     def create_new_offspring(self):
         # recombination
@@ -95,6 +111,20 @@ class EvolutionStrategy:
             x_new = offspring_pre_mutation + u_random_sample
             self.offspring = np.clip(x_new, self.x_bounds[0], self.x_bounds[1])
             self.offspring_objectives = np.squeeze(np.apply_along_axis(func1d=self.objective_function, arr=self.offspring, axis=1))
+        elif self.mutation_method == "complex": # non isotropic covariance
+            self.mutation_standard_deviations = self.mutation_standard_deviations * \
+                                                np.exp(self.mutation_tau_dash*np.random.normal(0,1)
+                                                       +self.mutation_tau*np.random.normal(0,1, size=self.x_length))
+            self.rotation_matrix = self.rotation_matrix + self.mutation_Beta*np.random.normal(0,1, size=(self.x_length, self.x_length))
+            #rotation_matrix = 1/2*np.arctan(2 * np.divide(self.mutation_covariance,
+            #                                              np.einsum("ij,jk->ik",
+            #                                                        self.mutation_standard_deviations[:, np.newaxis] ** 2,
+            #                                                        -self.mutation_standard_deviations[np.newaxis, :] ** 2)))
+            if not np.all(np.linalg.eigvals(rotation_matrix) > 0):
+                rotation_matrix += np.eye(self.x_length)*1e-16
+            np.random.multivariate_normal(mean=np.zeros(self.x_length), cov=np.linalg.inv(rotation_matrix)@rotation_matrix,
+                                          size=self.offspring_number)
+
 
     def update_archive(self, x_new, objective_new):
         if len(self.archive) == 0:  # if empty then initialise with the first value
