@@ -2,36 +2,49 @@ import numpy as np
 
 
 class EvolutionStrategy:
-    def __init__(self, x_length, x_bounds, objective_function, archive_minimum_acceptable_dissimilarity,
+    def __init__(self, x_length, x_bounds, objective_function, archive_minimum_acceptable_dissimilarity=0.1,
                  parent_number=10,
                  selection_method="standard_mew_comma_lambda", mutation_method = "simple",
                  recombination_method="global",
-                 termination_min_abs_difference=1e-3,
+                 termination_min_abs_difference=1e-6,
                  maximum_archive_length=30, objective_count_maximum=10000,
-                 mutation_covariance_initialisation_fraction_of_range=0.1,
+                 mutation_covariance_initialisation_fraction_of_range=0.01,
+                 bound_enforcing_method="not_clipping",
                  **kwargs):
         self.x_length = x_length
         self.x_bounds = x_bounds
+        self.bound_enforcing_method = bound_enforcing_method
+        self.x_range = 2  # from -1 to 1 when interpolated
         self.objective_function_raw = objective_function
         self.selection_method = selection_method
         self.mutation_method = mutation_method
         self.recombination_method = recombination_method
         self.termination_min_abs_difference = termination_min_abs_difference
 
+        self.parent_number = parent_number
+        self.offspring_number = parent_number * 7  # parent to offspring ratio from slides (Schwefel 1987)
+
         if mutation_method == "complex":
             # Mutation parameters - taken from slides, recommended by (Schwefel 1987)
             self.mutation_tau = 1/np.sqrt(2*np.sqrt(x_length))
             self.mutation_tau_dash = 1/np.sqrt(2*x_length)
             self.mutation_Beta = 0.0873
-            self.mutation_standard_deviations = np.ones(x_length) * \
-                                                mutation_covariance_initialisation_fraction_of_range * (x_bounds[1] - x_bounds[0])
+            self.offspring_mutation_standard_deviations = np.ones((self.offspring_number, x_length)) * \
+                                                          mutation_covariance_initialisation_fraction_of_range * self.x_range
 
-            self.rotation_matrix = np.zeros(x_length, x_length)
+            self.rotation_matrices = np.broadcast_to(np.eye(x_length), (self.offspring_number, x_length, x_length))
         elif mutation_method == "simple":
-            self.standard_deviation_simple = mutation_covariance_initialisation_fraction_of_range*(x_bounds[1] - x_bounds[0])
+            self.standard_deviation_simple = mutation_covariance_initialisation_fraction_of_range*self.x_range
 
-        self.parent_number = parent_number
-        self.offspring_number = parent_number * 7  # parent to offspring ratio from slides (Schwefel 1987)
+        elif mutation_method == "diagonal":
+            self.mutation_tau = 1 / np.sqrt(2 * np.sqrt(x_length))
+            self.mutation_tau_dash = 1 / np.sqrt(2 * x_length)
+            self.offspring_mutation_standard_deviations = np.ones((self.offspring_number, x_length)) * \
+                                                          mutation_covariance_initialisation_fraction_of_range * self.x_range
+            self.parent_mutation_standard_deviations = np.ones((self.offspring_number, x_length)) * \
+                                                mutation_covariance_initialisation_fraction_of_range * self.x_range
+
+
 
         self.parents = np.zeros((self.parent_number, self.x_length))    # zeros not used, this just shows the shape of the array representing the parents
         self.parent_objectives = np.zeros(self.parent_number)   # initialise to zeros to show the shape
@@ -39,6 +52,7 @@ class EvolutionStrategy:
         self.offspring_objectives = np.zeros(self.offspring_number)
 
         self.objective_function_evaluation_count = 0  # initialise
+        self.generation_number = 0
         self.objective_count_maximum = objective_count_maximum
 
 
@@ -49,41 +63,49 @@ class EvolutionStrategy:
         self.archive_similar_dissimilarity = archive_minimum_acceptable_dissimilarity
         self.objective_history = []
 
-    def objective_function(self, *args, **kwargs):
+    def objective_function(self, x):
+        # interpolation done here to pass the objective function x correctly interpolated
         self.objective_function_evaluation_count += 1   # increment by one everytime objective function is called
-        return self.objective_function_raw(*args, **kwargs)
+        x_interp = np.interp(x, [-1, 1], self.x_bounds)
+        result = self.objective_function_raw(x_interp)
+        return result
 
     def run(self):
         self.initialise_random_population()
         while True:  # loop until termination criteria is reached
+            self.generation_number += 1
             self.select_parents()
             for x, objective in zip(self.parents, self.parent_objectives):  # update archive
                 self.update_archive(x, objective)
                 self.objective_history.append(objective)
             # termination criteria
-            if max(self.parent_objectives) - min(self.parent_objectives) < self.termination_min_abs_difference \
-                    or self.objective_function_evaluation_count > self.objective_count_maximum:
+            if max(self.parent_objectives) - min(self.parent_objectives) < self.termination_min_abs_difference:
+                print("converged")
                 break
-
+            elif self.objective_function_evaluation_count > self.objective_count_maximum:
+                print("max total iterations")
+                break
             self.create_new_offspring()
 
         return self.parents[np.argmin(self.parent_objectives), :], min(self.parent_objectives)
 
     def initialise_random_population(self):
-        self.offspring = np.random.uniform(low=self.x_bounds[0], high=self.x_bounds[1], size=(self.offspring_number, self.x_length))
+        self.offspring = np.random.uniform(low=-1, high=1, size=(self.offspring_number, self.x_length))
         self.offspring_objectives = np.squeeze(np.apply_along_axis(func1d=self.objective_function, arr=self.offspring, axis=1))
         if self.selection_method == "elitist":  # require pool including parents for select_parents function in this case
-            self.parents = np.random.uniform(low=self.x_bounds[0], high=self.x_bounds[1],
+            self.parents = np.random.uniform(low=-1, high=1,
                                                size=(self.parent_number, self.x_length))
             self.parent_objectives = np.apply_along_axis(func1d=self.objective_function, arr=self.parents, axis=1)
 
     def select_parents(self):
         if self.selection_method == "standard_mew_comma_lambda":
             # choose top values in linear time (np.argpartition doesn't sort top values amongst themselves)
-            new_parent_indxs = np.argpartition(self.offspring_objectives, self.parent_number)[:self.parent_number]
-            self.parents = self.offspring[new_parent_indxs, :]
-            self.parent_objectives = self.offspring_objectives[new_parent_indxs]
-        elif self.selection_method == "standard_mew_plus_lambda":
+            pool_objectives = self.offspring_objectives
+            pool = self.offspring
+            if self.mutation_method == "diagonal":
+                pool_standard_deviations = self.offspring_mutation_standard_deviations
+        else:
+            assert self.selection_method == "standard_mew_plus_lambda"
             # create pool selcted from
             pool_objectives = np.zeros(self.parent_number + self.offspring_number)
             pool_objectives[0:self.offspring_number] = self.offspring_objectives
@@ -92,38 +114,114 @@ class EvolutionStrategy:
             pool[0:self.offspring_number, :] = self.offspring
             pool[self.offspring_number:, :] = self.parents
 
-            new_parent_indxs = np.argpartition(pool_objectives, self.parent_number)[:self.parent_number]
-            self.parents = self.offspring[new_parent_indxs, :]
-            self.parent_objectives = pool_objectives[new_parent_indxs]
+        new_parent_indxs = np.argpartition(pool_objectives, self.parent_number)[:self.parent_number]
+        self.parents = pool[new_parent_indxs, :]
+        self.parent_objectives = pool_objectives[new_parent_indxs]
+
+        if self.mutation_method == "diagonal":
+            self.parent_mutation_standard_deviations = pool_standard_deviations[new_parent_indxs, :]
+
 
     def create_new_offspring(self):
         # recombination
         if self.recombination_method == "global":
             # for each element in each child, inherit from a random parent
             child_recombination_indxs = np.random.choice(self.parent_number, replace=True,
-                                           size= (self.offspring_number, self.x_length))
+                                           size = (self.offspring_number, self.x_length))
             offspring_pre_mutation = self.parents[child_recombination_indxs, np.arange(self.x_length)]
+            if self.mutation_method == "diagonal":
+                #  offspring_pre_mutation_standard_deviation = self.parent_mutation_standard_deviations[
+                #     child_recombination_indxs, np.arange(self.x_length)]
+                child_stratergy_recombination_indxs = np.random.choice(self.parent_number, replace=True,
+                                           size=(self.offspring_number,  self.x_length, 2))
+                offspring_pre_mutation_standard_deviation = \
+                    0.5*self.parent_mutation_standard_deviations[
+                        child_stratergy_recombination_indxs[:, :, 0], np.arange(self.x_length)] +\
+                    0.5*self.parent_mutation_standard_deviations[
+                        child_stratergy_recombination_indxs[:, :, 1], np.arange(self.x_length)]
 
         # mutation
         if self.mutation_method == "simple":
             u_random_sample = np.random.normal(loc=0, scale=self.standard_deviation_simple,
                                                size=offspring_pre_mutation.shape)
             x_new = offspring_pre_mutation + u_random_sample
-            self.offspring = np.clip(x_new, self.x_bounds[0], self.x_bounds[1])
-            self.offspring_objectives = np.squeeze(np.apply_along_axis(func1d=self.objective_function, arr=self.offspring, axis=1))
-        elif self.mutation_method == "complex": # non isotropic covariance
-            self.mutation_standard_deviations = self.mutation_standard_deviations * \
-                                                np.exp(self.mutation_tau_dash*np.random.normal(0,1)
-                                                       +self.mutation_tau*np.random.normal(0,1, size=self.x_length))
-            self.rotation_matrix = self.rotation_matrix + self.mutation_Beta*np.random.normal(0,1, size=(self.x_length, self.x_length))
-            #rotation_matrix = 1/2*np.arctan(2 * np.divide(self.mutation_covariance,
-            #                                              np.einsum("ij,jk->ik",
-            #                                                        self.mutation_standard_deviations[:, np.newaxis] ** 2,
-            #                                                        -self.mutation_standard_deviations[np.newaxis, :] ** 2)))
-            if not np.all(np.linalg.eigvals(rotation_matrix) > 0):
-                rotation_matrix += np.eye(self.x_length)*1e-16
-            np.random.multivariate_normal(mean=np.zeros(self.x_length), cov=np.linalg.inv(rotation_matrix)@rotation_matrix,
+            if self.bound_enforcing_method == "clipping":
+                x_new = np.clip(x_new, -1, 1)
+            else:
+                while np.max(x_new) > 1 or np.min(x_new) < -1:
+                    indxs_breaking_bounds = np.where((x_new > 1) + (x_new < -1) == 1)
+                    u_random_sample = np.random.normal(loc=0, scale=self.standard_deviation_simple,
+                                                       size=indxs_breaking_bounds[0].size)
+                    x_new[indxs_breaking_bounds ] = offspring_pre_mutation[indxs_breaking_bounds ] + u_random_sample
+
+
+        elif self.mutation_method == "complex" or "diagonal":  # non spherical covariance
+            self.offspring_mutation_standard_deviations = \
+                offspring_pre_mutation_standard_deviation * \
+                np.exp(
+                        self.mutation_tau_dash*np.broadcast_to(
+                            np.random.normal(0, 1, size=(self.offspring_number, 1)), self.offspring_mutation_standard_deviations.shape)
+                           + self.mutation_tau*np.random.normal(
+                                               0, 1, size=self.offspring_mutation_standard_deviations.shape))
+            self.offspring_mutation_standard_deviations = np.clip(self.offspring_mutation_standard_deviations,
+                                                                  self.termination_min_abs_difference, 1)
+
+            u_random_sample = np.random.normal(loc=0, scale=self.offspring_mutation_standard_deviations,
+                                               size=offspring_pre_mutation.shape)
+            x_new = offspring_pre_mutation + u_random_sample
+            if self.bound_enforcing_method == "clipping":
+                x_new = np.clip(x_new, -1, 1)
+            else:
+                while np.max(x_new) > 1 or np.min(x_new) < -1:
+                    indxs_breaking_bounds = np.where((x_new > 1) + (x_new < -1) == 1)
+                    u_random_sample = np.random.normal(loc=0, scale=self.offspring_mutation_standard_deviations[indxs_breaking_bounds],
+                                                       size=indxs_breaking_bounds[0].size)
+                    x_new[indxs_breaking_bounds] = offspring_pre_mutation[indxs_breaking_bounds] + u_random_sample
+
+        elif self.mutation_method == "complex":
+
+            self.offspring_mutation_standard_deviations = \
+                self.offspring_mutation_standard_deviations * \
+                np.exp(
+                        self.mutation_tau_dash*np.broadcast_to(
+                            np.random.normal(0, 1, size=(self.offspring_number, 1)), self.offspring_mutation_standard_deviations.shape)
+                           + self.mutation_tau*np.random.normal(
+                                               0, 1, size=self.offspring_mutation_standard_deviations.shape))
+
+            if self.mutation_method == "complex":
+                self.rotation_matrices = self.rotation_matrices + self.mutation_Beta * np.random.normal(0, 1, size=(self.rotation_matrices.shape))
+
+                # rotation_matrix = 1/2*np.arctan(2 * np.divide(self.mutation_covariance,
+                #                                               np.einsum("ij,jk->ik",
+                #                                                         self.mutation_standard_deviations[:, np.newaxis] ** 2,
+                #                                                         -self.mutation_standard_deviations[np.newaxis, :] ** 2)))
+                for i in range(self.offspring_number):  # make positive definate
+                    self.rotation_matrices[i, :, :] = self.make_positive_definate(self.rotation_matrices[i, :, :])
+
+            for i in range(self.offspring_number):
+                np.random.multivariate_normal(mean=np.zeros(self.x_length), cov=np.linalg.inv(rotation_matrix)@rotation_matrix,
                                           size=self.offspring_number)
+                if self.bound_enforcing_method == "clipping":
+                    x_new =  np.clip(x_new, -1, 1)
+                else:
+                    if np.max(x_new) > 1 or np.min(x_new) < -1:
+                        pass # TODO this
+
+        self.offspring = x_new
+        self.offspring_objectives = np.squeeze(
+            np.apply_along_axis(func1d=self.objective_function, arr=self.offspring, axis=1))
+
+    def make_positive_definate(self, matrix):
+        try:
+            np.linalg.cholesky(matrix)
+            return matrix
+        except:
+            matrix += np.eye(self.x_length) * 1e-6
+            try:
+                np.linalg.cholesky(matrix)
+                return matrix
+            except:
+                print("matrix unable to be made positive definate")
 
 
     def update_archive(self, x_new, objective_new):
@@ -151,9 +249,20 @@ class EvolutionStrategy:
 
 if __name__ == "__main__":
     np.random.seed(0)
+    x_length = 5
+    mutation_method = "diagonal" #"complex"    # "simple"
+    from rana import rana_func
+
+    x_max = 500
+    x_min = -x_max
+    rana_2d = EvolutionStrategy(x_length=x_length, x_bounds=(x_min, x_max), objective_function=rana_func,
+                                mutation_method=mutation_method)
+    x_result, objective_result = rana_2d.run()
+    print(f"x_result = {x_result} \n objective_result = {objective_result} \n ")
+
+    """
     test = "rana"
     import matplotlib.pyplot as plt
-
     if test == "rana":  # rana function
         from rana import rana_func
         x_max = 500
@@ -187,3 +296,4 @@ if __name__ == "__main__":
 
         plt.plot(simple_evolve.objective_history)
         plt.show()
+"""
