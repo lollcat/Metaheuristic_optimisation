@@ -10,6 +10,7 @@ class EvolutionStrategy:
                  maximum_archive_length=30, objective_count_maximum=10000,
                  mutation_covariance_initialisation_fraction_of_range=0.01,
                  bound_enforcing_method="not_clipping",
+                 child_to_parent_ratio = 7,
                  **kwargs):
         self.x_length = x_length
         self.x_bounds = x_bounds
@@ -22,7 +23,7 @@ class EvolutionStrategy:
         self.termination_min_abs_difference = termination_min_abs_difference
 
         self.parent_number = parent_number
-        self.offspring_number = parent_number * 7  # parent to offspring ratio from slides (Schwefel 1987)
+        self.offspring_number = parent_number * child_to_parent_ratio  # parent to offspring ratio from slides (Schwefel 1987)
 
         if mutation_method == "complex":
             # Mutation parameters - taken from slides, recommended by (Schwefel 1987)
