@@ -39,6 +39,7 @@ class SimulatedAnnealing:
         self.bound_enforcing_method = bound_enforcing_method
         # initialise parameters related to annealing schedule
         self.temperature_history = []
+        self.step_size_matrix_history = []
         self.Markov_chain_length = 0    # initialise to 0
         self.acceptances_count = 0  # initialise to 0
         self.acceptances_total_count = 0    # initialise to 0
@@ -145,7 +146,7 @@ class SimulatedAnnealing:
         # initialise x randomly within the given bounds
         return np.random.uniform(low=-1, high=1, size=self.x_length)
 
-    def initialise_temperature(self, x_current, objective_current, n_steps=10, average_accept_probability=0.8):
+    def initialise_temperature(self, x_current, objective_current, n_steps=60, average_accept_probability=0.8):
         """
         Initialises system temperature
         As all x's are initially accepted, x does a random walk, so changes in x are not returned
@@ -192,35 +193,53 @@ class SimulatedAnnealing:
                     raise Exception("couldn't get positive definate step size control matrix")
 
         elif self.pertubation_method == "Diagonal":
-            clipping_fraction_of_range = 10
+
             self.step_size_matrix = (1-self.pertubation_alpha)*self.step_size_matrix + \
                                    np.diag(self.pertubation_alpha*self.pertubation_omega*np.abs(x_new - x_old))
+            # clipping_fraction_of_range = 10
             #self.step_size_matrix = np.clip(self.step_size_matrix, self.x_range*1e-16,
             #                                self.x_range*clipping_fraction_of_range)  # clip stepsize to not be too large
             # noise sampled in both directions so can clip step size matrix to be bounded by just over 0
             # instead of big negative and big positve numbers - this prevents any step size from going to 0 or becoming
             # too large
+            self.step_size_matrix_history.append(np.diag(self.step_size_matrix))
 
     def perturb_x(self, x):
         if self.pertubation_method == "simple":
             u_random_sample = np.random.uniform(low=-1, high=1, size=self.x_length)
             x_new = x + self.step_size_matrix * u_random_sample  # constant step size
+            if self.bound_enforcing_method == "clipping":
+                return np.clip(x_new, -1, 1)
+            else:
+                while max(x_new) > 1 or min(x_new) < -1:
+                    indxs_breaking_bounds = np.where((x_new > 1) + (x_new < -1) == 1)
+                    u_random_sample = np.random.uniform(low=-1, high=1, size=indxs_breaking_bounds[0].size)
+                    x_new[indxs_breaking_bounds] = x[indxs_breaking_bounds] + self.step_size_matrix * u_random_sample  # constant step size
+
 
         elif self.pertubation_method == "Cholesky":
             u_random_sample = np.random.uniform(low=-np.sqrt(3), high=np.sqrt(3), size=self.x_length)
             Q = np.linalg.cholesky(self.step_size_control_matrix)
             x_new = x + Q@u_random_sample
+            if self.bound_enforcing_method == "clipping":
+                return np.clip(x_new, -1, 1)
+            else:
+                if max(x_new) > 1 or min(x_new) < -1:
+                     x_new = self.perturb_x(x)   # recursively call perturb until sampled within bounds
 
         elif self.pertubation_method == "Diagonal":
             u_random_sample = np.random.uniform(low=-1, high=1, size=self.x_length)
             x_new = x+self.step_size_matrix@u_random_sample
+            if self.bound_enforcing_method == "clipping":
+                return np.clip(x_new, -1, 1)
+            else:
+                while max(x_new) > 1 or min(x_new) < -1:
+                     #x_new = self.perturb_x(x)   # recursively call perturb until sampled within bounds
+                    indxs_breaking_bounds = np.where((x_new > 1) + (x_new < -1) == 1)
+                    u_random_sample = np.random.uniform(low=-1, high=1, size=indxs_breaking_bounds[0].size)
+                    x_new[indxs_breaking_bounds] = x[indxs_breaking_bounds] + np.diag(np.diag(self.step_size_matrix)[indxs_breaking_bounds])@u_random_sample
 
-        if self.bound_enforcing_method == "clipping":
-            return np.clip(x_new, -1, 1)
-        else:
-            if max(x_new) > 1 or min(x_new) < -1:
-                 x_new = self.perturb_x(x)   # recursively call perturb until sampled within bounds
-            return x_new
+        return x_new
 
 
     def asses_restart(self, min_difference = 0.01):
@@ -328,8 +347,9 @@ class SimulatedAnnealing:
 
 if __name__ == "__main__":
     np.random.seed(0)
-    pertubation_method= "simple" #"Diagonal"
+    pertubation_method= "Diagonal" # "simple" #
     annealing_schedule = "adaptive_cooling"
+    bound_enforcing_method = "not_clipping"
 
 
     from rana import rana_func
@@ -344,7 +364,7 @@ if __name__ == "__main__":
     rana_2d_chol = SimulatedAnnealing(x_length=x_length, x_bounds=(x_min, x_max), objective_function=rana_func,
                                       pertubation_method=pertubation_method, maximum_archive_length=100,
                                       maximum_markov_chain_length=maximum_markov_chain_length,annealing_schedule = annealing_schedule,
-                                      maximum_function_evaluations=10000)
+                                      maximum_function_evaluations=10000, bound_enforcing_method=bound_enforcing_method)
     x_result_chol, objective_result_chol = rana_2d_chol.run()
     print(f"x_result = {x_result_chol} \n objective_result = {objective_result_chol} \n "
           f"number of function evaluations = {rana_2d_chol.objective_function_evaluation_count}")
