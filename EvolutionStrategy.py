@@ -76,9 +76,10 @@ class EvolutionStrategy:
         while True:  # loop until termination criteria is reached
             self.generation_number += 1
             self.select_parents()
-            for x, objective in zip(self.parents, self.parent_objectives):  # update archive
-                self.update_archive(x, objective)
-                self.objective_history.append(objective)
+            self.objective_history.append([self.parent_objectives.min(), self.parent_objectives.mean()])
+            #for x, objective in zip(self.parents, self.parent_objectives):  # update archive
+            #    self.update_archive(x, objective)
+            #    self.objective_history.append(objective)
             # termination criteria
             if max(self.parent_objectives) - min(self.parent_objectives) < self.termination_min_abs_difference:
                 print("converged")
@@ -245,6 +246,10 @@ class EvolutionStrategy:
                                       for i in range(len(self.archive))])
                 if True in similar_and_better:
                     self.archive[np.where(similar_and_better == True)[0][0]] = (x_new, objective_new)
+
+    @property
+    def objective_history_array(self):
+        return np.array(self.objective_history)
 
 
 
