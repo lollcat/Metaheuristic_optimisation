@@ -100,11 +100,11 @@ class SimulatedAnnealing:
         while done is False:
             x_new = self.perturb_x(self.x_current)
             objective_new = self.objective_function(x_new)
-            self.update_archive(x_new, objective_new)
             delta_objective = objective_new - self.objective_current
             delta_x = x_new - self.x_current
             self.objective_history.append(objective_new)
             if self.accept_x_update(delta_objective, delta_x):
+                self.update_archive(x_new, objective_new)
                 # accept change if there is an improvement, or probabilisticly (based on given temperature)
                 if self.pertubation_method == "Cholesky":   # store recent x values to get covariance matrix
                     self.recent_x_history.append(x_new)
