@@ -9,6 +9,7 @@ class EvolutionStrategy:
                  termination_min_abs_difference=1e-6,
                  maximum_archive_length=30, objective_count_maximum=10000,
                  mutation_covariance_initialisation_fraction_of_range=0.01,
+                 standard_deviation_clipping_fraction_of_range = 0.05,
                  bound_enforcing_method="not_clipping",
                  child_to_parent_ratio=7,
                  **kwargs):
@@ -21,6 +22,7 @@ class EvolutionStrategy:
         self.mutation_method = mutation_method
         self.recombination_method = recombination_method
         self.termination_min_abs_difference = termination_min_abs_difference
+        self.standard_deviation_clipping_fraction_of_range = standard_deviation_clipping_fraction_of_range
 
         self.parent_number = parent_number
         self.offspring_number = parent_number * child_to_parent_ratio  # parent to offspring ratio from slides (Schwefel 1987)
@@ -69,6 +71,7 @@ class EvolutionStrategy:
         self.archive_minimum_acceptable_dissimilarity = archive_minimum_acceptable_dissimilarity
         self.archive_similar_dissimilarity = archive_minimum_acceptable_dissimilarity
         self.parent_objective_history = []
+        self.parent_standard_deviation_history = []
         self.offspring_objective_history = []
 
     def objective_function(self, x):
@@ -87,13 +90,17 @@ class EvolutionStrategy:
             for x, objective in zip(self.parents, self.parent_objectives):  # update archive
                 self.update_archive(x, objective)
             self.parent_objective_history.append(self.parent_objectives)
+            if self.mutation_method == "diagonal" or self.mutation_method == "complex":
+                self.parent_standard_deviation_history.append(self.parent_mutation_standard_deviations)
+            if self.objective_function_evaluation_count > self.objective_count_maximum:
+                print("max total iterations")
+                break
+            """
             # termination criteria
             if max(self.parent_objectives) - min(self.parent_objectives) < self.termination_min_abs_difference:
                 print("converged")
                 break
-            elif self.objective_function_evaluation_count > self.objective_count_maximum:
-                print("max total iterations")
-                break
+            """
             self.create_new_offspring()
             self.offspring_objective_history.append(self.offspring_objectives)
 
@@ -157,7 +164,7 @@ class EvolutionStrategy:
             child_recombination_indxs = np.random.choice(self.parent_number, replace=True,
                                            size = (self.offspring_number, self.x_length))
             offspring_pre_mutation = self.parents[child_recombination_indxs, np.arange(self.x_length)]
-            if self.mutation_method == "diagonal" or "complex":
+            if self.mutation_method == "diagonal" or self.mutation_method == "complex":
                 #  offspring_pre_mutation_standard_deviation = self.parent_mutation_standard_deviations[
                 #     child_recombination_indxs, np.arange(self.x_length)]
                 child_stratergy_recombination_indxs = np.random.choice(self.parent_number, replace=True,
@@ -199,7 +206,7 @@ class EvolutionStrategy:
                     x_new[indxs_breaking_bounds ] = offspring_pre_mutation[indxs_breaking_bounds ] + u_random_sample
 
 
-        elif self.mutation_method == "complex" or "diagonal":  # non spherical covariance
+        elif self.mutation_method == "diagonal":  # non spherical covariance
             self.offspring_mutation_standard_deviations = \
                 offspring_pre_mutation_standard_deviation * \
                 np.exp(
@@ -208,7 +215,7 @@ class EvolutionStrategy:
                            + self.mutation_tau*np.random.normal(
                                                0, 1, size=self.offspring_mutation_standard_deviations.shape))
             self.offspring_mutation_standard_deviations = np.clip(self.offspring_mutation_standard_deviations,
-                                                                  self.termination_min_abs_difference, 1)
+                                                                  self.termination_min_abs_difference, self.standard_deviation_clipping_fraction_of_range*self.x_range)
 
             u_random_sample = np.random.normal(loc=0, scale=self.offspring_mutation_standard_deviations,
                                                size=offspring_pre_mutation.shape)
@@ -231,8 +238,13 @@ class EvolutionStrategy:
                            + self.mutation_tau*np.random.normal(
                                                0, 1, size=self.offspring_mutation_standard_deviations.shape))
 
-            self.offspring_rotation_matrices = offspring_pre_mutation_rotation_matrix + self.mutation_Beta * np.random.normal(0, 1, size=(self.offspring_rotation_matrices.shape))
+            self.offspring_mutation_standard_deviations = np.clip(self.offspring_mutation_standard_deviations,
+                                                                  self.termination_min_abs_difference,
+                                                                  self.standard_deviation_clipping_fraction_of_range * self.x_range)
 
+            self.offspring_rotation_matrices = offspring_pre_mutation_rotation_matrix + self.mutation_Beta * np.random.normal(0, 1, size=(self.offspring_rotation_matrices.shape))
+            self.offspring_rotation_matrices = self.offspring_rotation_matrices/np.broadcast_to(np.linalg.det(self.offspring_rotation_matrices)[:, np.newaxis, np.newaxis], (self.offspring_number, self.x_length, self.x_length))
+            #self.offspring_rotation_matrices = np.clip(self.offspring_rotation_matrices, -np.pi/4 - 0.1, np.pi/4 - 0.1)
 
             # rotation_matrix = 1/2*np.arctan(2 * np.divide(self.mutation_covariance,
             #                                               np.einsum("ij,jk->ik",
@@ -263,7 +275,7 @@ class EvolutionStrategy:
         except:
             if i > 10:
                 raise Exception("matrix unable to be made positive definate")
-            matrix += np.eye(self.x_length) * 1e-16 * 1000**i
+            matrix += np.eye(self.x_length) * 1e-16 * 100**i
             return self.make_positive_definate(matrix, i=i+1)
 
         """
@@ -305,6 +317,7 @@ class EvolutionStrategy:
             sigma_i[offspring_number, np.arange(self.x_length), :] = stds**2
             sigma_j[offspring_number, :, np.arange(self.x_length)] = stds**2
         self.offspring_covariance_matrices = np.tan(2 * self.offspring_rotation_matrices) * (sigma_i - sigma_j) * 1/2
+        self.offspring_covariance_matrices = np.clip(self.offspring_covariance_matrices, -self.x_range, self.x_range)
         self.offspring_covariance_matrices[:, np.arange(self.x_length), np.arange(self.x_length)] = self.offspring_mutation_standard_deviations
 
     @property
@@ -315,13 +328,17 @@ class EvolutionStrategy:
     def offspring_objective_history_array(self):
         return np.array(self.offspring_objective_history)
 
+    @property
+    def parent_standard_deviation_history_array(self):
+        return np.array(self.parent_standard_deviation_history)
+
 
 
 if __name__ == "__main__":
     np.random.seed(0)
     x_length = 5
-    mutation_method = "complex" # "diagonal" #"complex"    # "simple"
-    selection_method = "standard_mew_comma_lambda" #  "elitist"  # "standard_mew_comma_lambda"
+    mutation_method = "complex"  # "diagonal" #"complex"    # "simple"
+    selection_method =  "elitist" # "standard_mew_comma_lambda" #  "elitist"  # "standard_mew_comma_lambda"
     clipping_method = "not_clipping"
     from rana import rana_func
 
@@ -329,7 +346,7 @@ if __name__ == "__main__":
     x_min = -x_max
     rana_2d = EvolutionStrategy(x_length=x_length, x_bounds=(x_min, x_max), objective_function=rana_func,
                                 mutation_method=mutation_method, selection_method =selection_method,
-                                bound_enforcing_method=clipping_method, parent_number=20)
+                                bound_enforcing_method=clipping_method, parent_number=10)
     x_result, objective_result = rana_2d.run()
     print(f"x_result = {x_result} \n objective_result = {objective_result} \n ")
 
