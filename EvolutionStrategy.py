@@ -215,7 +215,7 @@ class EvolutionStrategy:
                            + self.mutation_tau*np.random.normal(
                                                0, 1, size=self.offspring_mutation_standard_deviations.shape))
             self.offspring_mutation_standard_deviations = np.clip(self.offspring_mutation_standard_deviations,
-                                                                  self.termination_min_abs_difference, self.standard_deviation_clipping_fraction_of_range*self.x_range)
+                                                                  1e-8, self.standard_deviation_clipping_fraction_of_range*self.x_range)
 
             u_random_sample = np.random.normal(loc=0, scale=self.offspring_mutation_standard_deviations,
                                                size=offspring_pre_mutation.shape)
@@ -231,7 +231,7 @@ class EvolutionStrategy:
 
         if self.mutation_method == "complex":
             self.offspring_mutation_standard_deviations = \
-                self.offspring_mutation_standard_deviations * \
+                offspring_pre_mutation_standard_deviation  * \
                 np.exp(
                         self.mutation_tau_dash*np.broadcast_to(
                             np.random.normal(0, 1, size=(self.offspring_number, 1)), self.offspring_mutation_standard_deviations.shape)
@@ -239,30 +239,29 @@ class EvolutionStrategy:
                                                0, 1, size=self.offspring_mutation_standard_deviations.shape))
 
             self.offspring_mutation_standard_deviations = np.clip(self.offspring_mutation_standard_deviations,
-                                                                  self.termination_min_abs_difference,
+                                                                  1e-8,
                                                                   self.standard_deviation_clipping_fraction_of_range * self.x_range)
 
             self.offspring_rotation_matrices = offspring_pre_mutation_rotation_matrix + self.mutation_Beta * np.random.normal(0, 1, size=(self.offspring_rotation_matrices.shape))
-            self.offspring_rotation_matrices = self.offspring_rotation_matrices/np.broadcast_to(np.linalg.det(self.offspring_rotation_matrices)[:, np.newaxis, np.newaxis], (self.offspring_number, self.x_length, self.x_length))
-            #self.offspring_rotation_matrices = np.clip(self.offspring_rotation_matrices, -np.pi/4 - 0.1, np.pi/4 - 0.1)
+            #self.offspring_rotation_matrices = self.offspring_rotation_matrices/np.broadcast_to(np.linalg.det(self.offspring_rotation_matrices)[:, np.newaxis, np.newaxis], (self.offspring_number, self.x_length, self.x_length))
+            #self.offspring_rotation_matrices = np.clip(self.offspring_rotation_matrices, -np.pi/4, np.pi/4)
 
             # rotation_matrix = 1/2*np.arctan(2 * np.divide(self.mutation_covariance,
             #                                               np.einsum("ij,jk->ik",
             #                                                         self.mutation_standard_deviations[:, np.newaxis] ** 2,
             #                                                         -self.mutation_standard_deviations[np.newaxis, :] ** 2)))
-            for i in range(self.offspring_number):  # make positive definate
+            for i in range(self.offspring_number):
                 self.offspring_rotation_matrices[i, :, :] = np.tril(self.offspring_rotation_matrices[i, :, :], k=-1) - np.tril(
-                    self.offspring_rotation_matrices[i, :, :], k=-1).T
+                    self.offspring_rotation_matrices[i, :, :], k=-1).T      # make symmetric
             self.make_covariance_matrix()
             for i in range(self.offspring_number):
                 covariance_matrix = self.make_positive_definate(self.offspring_covariance_matrices[i, :, :])
                 self.offspring[i, :] = offspring_pre_mutation[i, :] + np.random.multivariate_normal(mean=np.zeros(self.x_length), cov=covariance_matrix)
                 if self.bound_enforcing_method == "clipping":
-                    x_new =  np.clip(x_new, -1, 1)
+                    self.offspring[i, :]  =  np.clip(self.offspring[i, :] , -1, 1)
                 else:
                     if np.max(self.offspring[i, :]) > 1 or np.min(self.offspring[i, :]) < -1:
-                        self.offspring[i, :] = np.random.multivariate_normal(
-                            mean=np.zeros(self.x_length), cov=self.offspring_covariance_matrices[i, :, :])
+                        self.offspring[i, :] = offspring_pre_mutation[i, :] + np.random.multivariate_normal(mean=np.zeros(self.x_length), cov=covariance_matrix)
         if self.mutation_method != "complex":
             self.offspring = x_new
         self.offspring_objectives = np.squeeze(
@@ -275,7 +274,7 @@ class EvolutionStrategy:
         except:
             if i > 10:
                 raise Exception("matrix unable to be made positive definate")
-            matrix += np.eye(self.x_length) * 1e-16 * 100**i
+            matrix += np.eye(self.x_length) * 1e-6 * 10**i
             return self.make_positive_definate(matrix, i=i+1)
 
         """
@@ -314,10 +313,13 @@ class EvolutionStrategy:
         sigma_j = np.zeros((self.offspring_number, self.x_length, self.x_length))
         for offspring_number in range(self.offspring_number):
             stds = self.offspring_mutation_standard_deviations[offspring_number, :]
-            sigma_i[offspring_number, np.arange(self.x_length), :] = stds**2
-            sigma_j[offspring_number, :, np.arange(self.x_length)] = stds**2
-        self.offspring_covariance_matrices = np.tan(2 * self.offspring_rotation_matrices) * (sigma_i - sigma_j) * 1/2
-        self.offspring_covariance_matrices = np.clip(self.offspring_covariance_matrices, -self.x_range, self.x_range)
+            sigma_i[offspring_number, np.arange(self.x_length), :] = stds
+            sigma_j[offspring_number, :, np.arange(self.x_length)] = stds
+        self.offspring_covariance_matrices = np.tan(2 * self.offspring_rotation_matrices) * (sigma_i**2 - sigma_j**2) * 1/2
+        self.offspring_covariance_matrices = np.clip(self.offspring_covariance_matrices, -np.minimum(sigma_i, sigma_j), np.minimum(sigma_i, sigma_j))
+        #self.offspring_covariance_matrices = np.clip(self.offspring_covariance_matrices,
+        #                                            -self.x_range*self.standard_deviation_clipping_fraction_of_range,
+         #                                           self.standard_deviation_clipping_fraction_of_range*self.x_range)
         self.offspring_covariance_matrices[:, np.arange(self.x_length), np.arange(self.x_length)] = self.offspring_mutation_standard_deviations
 
     @property
