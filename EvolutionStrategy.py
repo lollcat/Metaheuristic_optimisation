@@ -11,8 +11,7 @@ class EvolutionStrategy:
                  mutation_covariance_initialisation_fraction_of_range=0.01,
                  standard_deviation_clipping_fraction_of_range = 0.05,
                  bound_enforcing_method="not_clipping",
-                 child_to_parent_ratio=7,
-                 **kwargs):
+                 child_to_parent_ratio=7):
         self.x_length = x_length
         self.x_bounds = x_bounds
         self.bound_enforcing_method = bound_enforcing_method
@@ -22,6 +21,8 @@ class EvolutionStrategy:
         self.mutation_method = mutation_method
         self.recombination_method = recombination_method
         self.termination_min_abs_difference = termination_min_abs_difference
+
+        # prevent standard deviations from becoming too large (clip relative to size of range)
         self.standard_deviation_clipping_fraction_of_range = standard_deviation_clipping_fraction_of_range
 
         self.parent_number = parent_number
@@ -42,6 +43,10 @@ class EvolutionStrategy:
             self.make_covariance_matrix()
             self.parent_rotation_matrices = self.offspring_rotation_matrices[0:self.parent_number, :, :]    # just slice children for initialisation
             self.parent_covariance_matrices = self.offspring_covariance_matrices[0:self.parent_number, :, :]
+
+            self.parent_covariance_determinant_history = []
+            self.offspring_covariance_determinant_history = []
+
         elif mutation_method == "simple":
             self.standard_deviation_simple = mutation_covariance_initialisation_fraction_of_range*self.x_range
 
@@ -62,7 +67,7 @@ class EvolutionStrategy:
 
         self.objective_function_evaluation_count = 0  # initialise
         self.generation_number = 0
-        self.objective_count_maximum = objective_count_maximum
+        self.objective_function_evaluation_max_count = objective_count_maximum
 
 
         # initialise archive and parameters determining how archive is managed
@@ -71,8 +76,10 @@ class EvolutionStrategy:
         self.archive_minimum_acceptable_dissimilarity = archive_minimum_acceptable_dissimilarity
         self.archive_similar_dissimilarity = archive_minimum_acceptable_dissimilarity
         self.parent_objective_history = []
+        self.parent_x_history = []
         self.parent_standard_deviation_history = []
         self.offspring_objective_history = []
+        self.offspring_x_history = []
 
     def objective_function(self, x):
         # interpolation done here to pass the objective function x correctly interpolated
@@ -90,21 +97,28 @@ class EvolutionStrategy:
             for x, objective in zip(self.parents, self.parent_objectives):  # update archive
                 self.update_archive(x, objective)
             self.parent_objective_history.append(self.parent_objectives)
+            self.parent_x_history.append(self.parents)
             if self.mutation_method == "diagonal" or self.mutation_method == "complex":
                 self.parent_standard_deviation_history.append(self.parent_mutation_standard_deviations)
-            if self.objective_function_evaluation_count > self.objective_count_maximum:
+                self.parent_covariance_determinant_history.append(np.linalg.det(self.parent_covariance_matrices))
+                self.offspring_covariance_determinant_history.append(np.linalg.det(self.offspring_covariance_matrices))
+            # ensure termination before 10000 iterations
+            if self.objective_function_evaluation_count > self.objective_function_evaluation_max_count-self.offspring_number:
                 print("max total iterations")
                 break
-            """
+
             # termination criteria
             if max(self.parent_objectives) - min(self.parent_objectives) < self.termination_min_abs_difference:
                 print("converged")
                 break
-            """
+
             self.create_new_offspring()
             self.offspring_objective_history.append(self.offspring_objectives)
+            self.offspring_x_history.append(self.offspring)
 
-        return self.parents[np.argmin(self.parent_objectives), :], min(self.parent_objectives)
+        best_x = self.parents[np.argmin(self.parent_objectives), :]
+        best_objective = min(self.parent_objectives)
+        return np.interp(best_x, [-1, 1], self.x_bounds), best_objective
 
     def initialise_random_population(self):
         self.offspring = np.random.uniform(low=-1, high=1, size=(self.offspring_number, self.x_length))
@@ -124,6 +138,7 @@ class EvolutionStrategy:
             if self.mutation_method == "complex":
                 pool_standard_deviations = self.offspring_mutation_standard_deviations
                 pool_rotation_matrices = self.offspring_rotation_matrices
+                pool_covariance_matrices = self.offspring_covariance_matrices
         else:
             assert self.selection_method == "elitist"
             # create pool selcted from
@@ -144,6 +159,9 @@ class EvolutionStrategy:
                 pool_rotation_matrices = np.zeros((self.offspring_number + self.parent_number, self.x_length, self.x_length))
                 pool_rotation_matrices[0:self.offspring_number, :, :] = self.offspring_rotation_matrices
                 pool_rotation_matrices[self.offspring_number:, :, :] = self.parent_rotation_matrices
+                pool_covariance_matrices = np.zeros((self.offspring_number + self.parent_number, self.x_length, self.x_length))
+                pool_covariance_matrices[0:self.offspring_number, :, :] = self.offspring_covariance_matrices
+                pool_covariance_matrices[self.offspring_number:, :, :] = self.parent_covariance_matrices
 
 
         new_parent_indxs = np.argpartition(pool_objectives, self.parent_number)[:self.parent_number]
@@ -155,6 +173,7 @@ class EvolutionStrategy:
         elif self.mutation_method == "complex":
             self.parent_mutation_standard_deviations = pool_standard_deviations[new_parent_indxs, :]
             self.parent_rotation_matrices = pool_rotation_matrices[new_parent_indxs, :, :]
+            self.parent_covariance_matrices = pool_covariance_matrices[new_parent_indxs, :, :]
 
 
     def create_new_offspring(self):
@@ -260,7 +279,7 @@ class EvolutionStrategy:
                 if self.bound_enforcing_method == "clipping":
                     self.offspring[i, :]  =  np.clip(self.offspring[i, :] , -1, 1)
                 else:
-                    if np.max(self.offspring[i, :]) > 1 or np.min(self.offspring[i, :]) < -1:
+                    while np.max(self.offspring[i, :]) > 1 or np.min(self.offspring[i, :]) < -1:
                         self.offspring[i, :] = offspring_pre_mutation[i, :] + np.random.multivariate_normal(mean=np.zeros(self.x_length), cov=covariance_matrix)
         if self.mutation_method != "complex":
             self.offspring = x_new
@@ -286,27 +305,58 @@ class EvolutionStrategy:
                 print("matrix unable to be made positive definate")
         """
 
-
     def update_archive(self, x_new, objective_new):
         if len(self.archive) == 0:  # if empty then initialise with the first value
             self.archive.append((x_new, objective_new))
         function_archive = [f_archive for x_archive, f_archive in self.archive]
         dissimilarity = [np.sqrt((x_archive - x_new).T @ (x_archive - x_new)) for x_archive, f_archive in self.archive]
-        if min(dissimilarity) > self.archive_minimum_acceptable_dissimilarity:
+        if min(dissimilarity) > self.archive_minimum_acceptable_dissimilarity:  # dissimilar to all points
             if len(self.archive) < self.archive_maximum_length:  # archive not full
                 self.archive.append((x_new, objective_new))
             else:  # if archive is full
                 if objective_new < min(function_archive):
                     self.archive[int(np.argmax(function_archive))] = (x_new, objective_new)  # replace worst solution
-        else:    # new solution is close to another
-            if objective_new < min(function_archive):
-                self.archive[int(np.argmin(dissimilarity))] = (x_new, objective_new)  # replace most similar value
+        else:  # new solution is close to another
+            if objective_new < min(function_archive):  # objective is lowest yet
+                most_similar_indx = int(np.argmin(dissimilarity))
+                self.archive[most_similar_indx] = (x_new, objective_new)  # replace most similar value
             else:
                 similar_and_better = np.array([dissimilarity[i] < self.archive_similar_dissimilarity and \
-                                      function_archive[i] > objective_new
-                                      for i in range(len(self.archive))])
+                                               function_archive[i] > objective_new
+                                               for i in range(len(self.archive))])
                 if True in similar_and_better:
                     self.archive[np.where(similar_and_better == True)[0][0]] = (x_new, objective_new)
+        #if self.objective_function_evaluation_count % (int(self.objective_function_evaluation_max_count / 10)) == 0:
+        if self.generation_number % 5 == 0:
+            # sometimes one value can like between 2 others, causing similarity even with the above loop
+            # clean_archive fixes this
+            # only need to do very rarely
+            self.clean_archive()
+
+    def clean_archive(self):
+        # first remove repeats
+        for x_new, y in self.archive:
+            dissimilarity = [np.sqrt((x_archive - x_new).T @ (x_archive - x_new)) for x_archive, f_archive in
+                             self.archive]
+            indxs_to_remove = np.where(np.array(dissimilarity) ==0)  # remove values that are close, with lower objectives
+            indxs_to_remove = indxs_to_remove[0]
+            if len(indxs_to_remove) > 0:
+                indxs_to_remove = indxs_to_remove[1:]  # remove all but the first copy
+                for i, indx_to_remove in enumerate(indxs_to_remove):
+                    # deletions changes indexes so we have to adjust by i each time
+                    del (self.archive[indx_to_remove - i])
+
+        # then remove overly similar
+        for x_new, y in self.archive:
+            dissimilarity = [np.sqrt((x_archive - x_new).T @ (x_archive - x_new)) for x_archive, f_archive in
+                             self.archive]
+            indxs_to_remove = np.where((np.array(dissimilarity) < self.archive_minimum_acceptable_dissimilarity) &
+                                       (self.archive_f > y))  # remove values that are close, with lower objectives
+            indxs_to_remove = indxs_to_remove[0]
+            if len(indxs_to_remove) > 0:
+                for i, indx_to_remove in enumerate(indxs_to_remove):
+                    # deletions changes indexes so we have to adjust by i each time
+                    del (self.archive[indx_to_remove - i])
 
     def make_covariance_matrix(self):
         sigma_i = np.zeros((self.offspring_number, self.x_length, self.x_length))
@@ -334,23 +384,54 @@ class EvolutionStrategy:
     def parent_standard_deviation_history_array(self):
         return np.array(self.parent_standard_deviation_history)
 
+    @property
+    def parent_covariance_determinant_history_array(self):
+        return np.array(self.parent_covariance_determinant_history)
+
+    @property
+    def offspring_covariance_determinant_history_array(self):
+        return np.array(self.offspring_covariance_determinant_history)
+    @property
+    def offspring_x_history_array(self):
+        return np.interp(np.array(self.offspring_x_history), [-1, 1], self.x_bounds)
+    @property
+    def parent_x_history_array(self):
+        return np.interp(np.array(self.parent_x_history), [-1, 1], self.x_bounds)
+
+    @property
+    def archive_x(self):
+        return np.interp(np.array([x_archive for x_archive, f_archive in self.archive]), [-1, 1], self.x_bounds)
+
+    @property
+    def archive_f(self):
+        return np.array([f_archive for x_archive, f_archive in self.archive])
+
 
 
 if __name__ == "__main__":
-    np.random.seed(0)
-    x_length = 5
-    mutation_method = "complex"  # "diagonal" #"complex"    # "simple"
-    selection_method =  "elitist" # "standard_mew_comma_lambda" #  "elitist"  # "standard_mew_comma_lambda"
-    clipping_method = "not_clipping"
     from rana import rana_func
-
+    Comp_config = {"objective_function": rana_func,
+                   "x_bounds": (-500, 500),
+                   "x_length": 2,
+                   "parent_number": 10,
+                   "child_to_parent_ratio": 7,
+                   "bound_enforcing_method": "not_clipping",
+                   "selection_method": "standard_mew_comma_lambda",
+                   "standard_deviation_clipping_fraction_of_range": 0.01,
+                   "mutation_covariance_initialisation_fraction_of_range": 0.01,
+                   "mutation_method": "complex",
+                   "termination_min_abs_difference": 1e-6,
+                   "maximum_archive_length": 100}
+    random_seed = 1
+    np.random.seed(random_seed)
     x_max = 500
     x_min = -x_max
-    rana_2d = EvolutionStrategy(x_length=x_length, x_bounds=(x_min, x_max), objective_function=rana_func,
-                                mutation_method=mutation_method, selection_method =selection_method,
-                                bound_enforcing_method=clipping_method, parent_number=10)
-    x_result, objective_result = rana_2d.run()
-    print(f"x_result = {x_result} \n objective_result = {objective_result} \n ")
+    evo_comp = EvolutionStrategy(**Comp_config)
+    x_result, objective_result = evo_comp.run()
+    print(f"x_result = {x_result} \n objective_result = {objective_result}\n\n\n\
+          number of objective_evaluations is {evo_comp.objective_function_evaluation_count}\
+          number of generations is {evo_comp.generation_number}")
+    evo_comp.clean_archive()
 
     """
     test = "rana"

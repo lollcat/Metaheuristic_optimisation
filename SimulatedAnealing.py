@@ -12,13 +12,16 @@ class SimulatedAnnealing:
     """
     def __init__(self, x_length, x_bounds, objective_function,
                  pertubation_method="simple",
-                 annealing_schedule="simple_exponential_cooling", halt_definition="max_function_evaluations", with_restarts=False,
-                 archive_minimum_acceptable_dissimilarity=0.1,
+                 annealing_schedule="simple_exponential_cooling", with_restarts=False,
+                 archive_minimum_acceptable_dissimilarity=0.2,
                  maximum_markov_chain_length=10, bound_enforcing_method="clipping",
-                 maximum_archive_length=25, step_size_initialisation_fraction_of_range=0.5, annealing_alpha=0.95,
+                 maximum_archive_length=20, step_size_initialisation_fraction_of_range=0.5, annealing_alpha=0.95,
                  maximum_function_evaluations=10000,
                  cholesky_path_length=5,
-                 pertubation_alpha = 0.1, pertubation_omega = 2.1
+                 pertubation_alpha = 0.1, pertubation_omega = 2.1,
+                 convergence_min_improvement = 1e-6,
+                 update_step_size_every_step = True,
+                 minimum_determinant = 1e-16,
                  ):
 
         self.x_length = x_length    # integer containing length of array x
@@ -27,9 +30,11 @@ class SimulatedAnnealing:
         self.objective_function_raw = objective_function
         self.pertubation_method = pertubation_method
         self.annealing_schedule = annealing_schedule
-        self.halt_definition = halt_definition
         self.markov_chain_maximum_length = maximum_markov_chain_length
         self.acceptances_minimum_count = round(0.6 * maximum_markov_chain_length)   # 0.6 is a heuristic from lectures
+        self.convergence_min_improvement = convergence_min_improvement
+        self.convergence_evaluation_window = int(maximum_function_evaluations/10)
+        self.update_step_size_every_step = update_step_size_every_step
 
         # initialise archive and parameters determining how archive is managed
         self.archive = []   # list of (x, objective value) tuples
@@ -38,6 +43,8 @@ class SimulatedAnnealing:
         self.archive_similar_dissimilarity = archive_minimum_acceptable_dissimilarity #*0.1 # threshold for x values being considered as similar
 
         self.accepted_objective_history = []
+        self.acceptences_locations = []
+        self.accepted_x_history = []
         self.objective_history = []
         self.x_history = []
         self.alpha_history = []
@@ -53,7 +60,7 @@ class SimulatedAnnealing:
         self.iterations_total = 0  # initialise to 0
         self.probability_of_acceptance_history = []
         self.restart_count = 0
-        self.max_iterations_without_acceptance_till_restart = 500
+        self.max_iterations_without_acceptance_till_restart = int(maximum_function_evaluations/10)
         self.with_restarts = with_restarts
 
         if pertubation_method == "simple":  # step size just a constant in this case
@@ -77,11 +84,7 @@ class SimulatedAnnealing:
         elif annealing_schedule == "adaptive_cooling":
             self.current_temperature_accepted_objective_values = []   # alpha calculated off standard deviation of this
 
-        #if halt_definition == "max_n_temperatures":
-        #    self.temperature_maximum_iterations = kwargs['temperature_maximum_iterations']
-        #elif halt_definition == "max_function_evaluations":
-        # self.objective_function_evaluation_max_count = kwargs['maximum_function_evaluations']
-        self.objective_function_evaluation_max_count = maximum_function_evaluations #kwargs['maximum_function_evaluations']
+        self.objective_function_evaluation_max_count = maximum_function_evaluations
 
 
     def objective_function(self, x):
@@ -122,16 +125,20 @@ class SimulatedAnnealing:
                     # record accepted objective values in the current chain
                     self.current_temperature_accepted_objective_values.append(self.objective_current)
                 self.accepted_objective_history.append([objective_new, self.objective_function_evaluation_count])
+                self.acceptences_locations.append(self.objective_function_evaluation_count)  # when in optimisation acceptence occured
+                self.accepted_x_history.append(x_new)
                 self.acceptances_count += 1 # in current markov chain
                 self.acceptances_total_count += 1
                 self.iterations_without_acceptance = 0
-
+                if not self.update_step_size_every_step: # TODO see what is said in email
+                    self.update_step_size()
             else:
                 self.iterations_without_acceptance += 1
             self.Markov_chain_length += 1
             self.iterations_total += 1
             done = self.temperature_scheduler()  # update temperature if need be
-            self.update_step_size()
+            if self.update_step_size_every_step:
+                self.update_step_size()
             if self.with_restarts:
                 self.asses_restart()
             if self.restart_count > 5:
@@ -175,7 +182,6 @@ class SimulatedAnnealing:
             x_current = x_new
             objective_current = objective_new
 
-        # TODO check this average increase is correct
         initial_temperature = - np.mean(objective_increase_history) / np.log(average_accept_probability)
         self.temperature = initial_temperature
         self.temperature_history.append([self.temperature, self.acceptances_total_count, self.objective_function_evaluation_count])
@@ -205,8 +211,7 @@ class SimulatedAnnealing:
                 if i > 7:
                     raise Exception("couldn't get positive definate step size control matrix")
             if np.linalg.det(self.step_size_matrix) < 1e-16: # double step size if determinant falls below 1e-6
-                self.step_size_control_matrix = self.step_size_control_matrix * 2
-                self.step_size_matrix = np.linalg.cholesky(self.step_size_control_matrix)
+                self.step_size_control_matrix = self.step_size_control_matrix * 1.1
                 # now have to enforce positive definateness again
                 while not self.is_positive_definate(self.step_size_control_matrix):
                     i += 1
@@ -293,9 +298,9 @@ class SimulatedAnnealing:
             if self.annealing_schedule == "simple_exponential_cooling":
                 self.temperature = self.temperature * self.annealing_alpha
             elif self.annealing_schedule == "adaptive_cooling":
-                raise Exception("incomplete code")
-                """
-                multiplier = (0.01 / 0.9) ** (1 / 10000)
+                #raise Exception("incomplete code")
+
+                multiplier = (0.05 / 0.8) ** (1 / 10000)
                 desired_probability = 0.9*multiplier**self.objective_function_evaluation_count
                 length = int(self.markov_chain_maximum_length/2)
                 if self.probability_of_acceptance_history_array.shape[0] >  length:
@@ -306,7 +311,7 @@ class SimulatedAnnealing:
                 else:
                     self.alpha = 0.95
                 self.alpha_history.append([self.alpha, self.objective_function_evaluation_count])
-                """
+
                 """
                 if len(self.current_temperature_accepted_objective_values) <= 1:
                     self.alpha = 2
@@ -325,39 +330,90 @@ class SimulatedAnnealing:
             self.Markov_chain_length = 0    # restart counter
             self.acceptances_count = 0  # restart counter
         done = self.get_halt()
+        if done is True:
+            self.temperature_history.append(
+                [self.temperature, self.acceptances_total_count, self.objective_function_evaluation_count])
+            self.accepted_objective_history.append([self.objective_current, self.objective_function_evaluation_count])
+            self.acceptences_locations.append(self.objective_function_evaluation_count) # when in optimisation acceptence occured
+            self.accepted_x_history.append(self.x_current)
         return done
 
     def get_halt(self):
-        if self.halt_definition == "max_n_temperatures":
-            if len(self.temperature_history) >= self.temperature_maximum_iterations:
-                done = True  # stopping criteria has been met
-            else:
-                done = False
-        elif self.halt_definition == "max_function_evaluations":
-            if self.objective_function_evaluation_count >= self.objective_function_evaluation_max_count:
+        """
+        1.  first check convergence, converge if over the last evaluation window (5% of total max function evals), the
+         diffrence between the maximum and minimum accepted values (within the window) is below the threshold defined
+         by self.convergence_min_improvement (typically set to 1e-8)
+        2. If the maximum number of function evaluations has been reached (typically set to 10 000) then end program
+        """
+        if self.objective_function_evaluation_count % self.convergence_evaluation_window == 0:
+            # only make this check every self.convergence_evaluation_window number of iterations
+            acceptences_locations_array = np.array(self.acceptences_locations)
+            acceptence_indx_over_window = \
+            np.arange(len(acceptences_locations_array))[
+                          acceptences_locations_array >
+                          self.objective_function_evaluation_count - self.convergence_evaluation_window]
+            if len(acceptence_indx_over_window) < 2: # 1 or 0 acceptences within last window implies convergence
+                print("converged")
                 done = True
-            else:
-                done = False
+                return done
+            else:  # caclulate diffrence between max and min over window
+                earliest_acceptence_indx_over_window = acceptence_indx_over_window[0]
+                best_accepted_value_over_recent_window = \
+                    np.max(self.accepted_objective_history_array[earliest_acceptence_indx_over_window:, 0])
+                worst_accepted_value_over_recent_window = \
+                    np.min(self.accepted_objective_history_array[earliest_acceptence_indx_over_window:, 0])
+
+                if best_accepted_value_over_recent_window - worst_accepted_value_over_recent_window < \
+                        self.convergence_min_improvement:
+                    print("converged")
+                    done = True
+                    return done
+        # check if max iter has been reached
+        if self.objective_function_evaluation_count >= self.objective_function_evaluation_max_count:
+            done = True
+        else:
+            done = False
         return done
 
     def update_archive(self, x_new, objective_new):
         function_archive = [f_archive for x_archive, f_archive in self.archive]
         dissimilarity = [np.sqrt((x_archive - x_new).T @ (x_archive - x_new)) for x_archive, f_archive in self.archive]
-        if min(dissimilarity) > self.archive_minimum_acceptable_dissimilarity:
+        if min(dissimilarity) > self.archive_minimum_acceptable_dissimilarity:  # dissimilar to all points
             if len(self.archive) < self.archive_maximum_length:  # archive not full
                 self.archive.append((x_new, objective_new))
             else:  # if archive is full
                 if objective_new < min(function_archive):
                     self.archive[int(np.argmax(function_archive))] = (x_new, objective_new)  # replace worst solution
         else:    # new solution is close to another
-            if objective_new < min(function_archive):
-                self.archive[int(np.argmin(dissimilarity))] = (x_new, objective_new)  # replace most similar value
+            if objective_new < min(function_archive):   # objective is lowest yet
+                most_similar_indx = int(np.argmin(dissimilarity))
+                self.archive[most_similar_indx] = (x_new, objective_new)  # replace most similar value
             else:
                 similar_and_better = np.array([dissimilarity[i] < self.archive_similar_dissimilarity and \
                                       function_archive[i] > objective_new
                                       for i in range(len(self.archive))])
                 if True in similar_and_better:
                     self.archive[np.where(similar_and_better == True)[0][0]] = (x_new, objective_new)
+        if self.objective_function_evaluation_count % (int(self.objective_function_evaluation_max_count/10)) == 0:
+            # sometimes one value can like between 2 others, causing similarity even with the above loop
+            # clean_archive fixes this
+            # only need to do very rarely
+            self.clean_archive()
+
+
+    def clean_archive(self):
+        for x_new, y in self.archive:
+            dissimilarity = [np.sqrt((x_archive - x_new).T @ (x_archive - x_new)) for x_archive, f_archive in
+                             self.archive]
+            indxs_to_remove = np.where((np.array(dissimilarity) < self.archive_minimum_acceptable_dissimilarity) &
+                                       (self.archive_f > y))  # remove values that are close, with lower objectives
+            indxs_to_remove = indxs_to_remove[0]
+            if len(indxs_to_remove) > 0:
+                for i, indx_to_remove in enumerate(indxs_to_remove):
+                    # deletions changes indexes so we have to adjust by i each time
+                    del(self.archive[indx_to_remove - i])
+
+
 
     @property
     def temperature_history_array(self):
@@ -374,6 +430,10 @@ class SimulatedAnnealing:
     @property
     def accepted_objective_history_array(self):
         return np.array(self.accepted_objective_history)
+
+    @property
+    def accepted_x_history_array(self):
+        return np.interp(np.array(self.accepted_x_history), [-1, 1], self.x_bounds)
 
     @property
     def objective_history_array(self):
@@ -395,6 +455,22 @@ class SimulatedAnnealing:
     def alpha_history_array(self):
         return np.array(self.alpha_history)
 
+    @property
+    def eigenvalue_eigenvector_history(self):
+        theta_history = []
+        eigen_values_history = []
+        for i in range(self.step_size_matrix_history_array.shape[0]):
+            step_size_matrix = self.step_size_matrix_history_array[i, :, :]
+            eigenvalues, eigenvectors = np.linalg.eig(step_size_matrix)
+            thetas = np.arccos(np.eye(self.x_length) @ eigenvectors)
+            min_thetas = np.min(thetas, axis=0)
+            order = np.argsort(-eigenvalues)
+            eigen_values_history.append(list(eigenvalues[order]))
+            theta_history.append(list(min_thetas[order]))
+        return np.array(eigen_values_history), np.array(theta_history)
+
+
+
 
 
 
@@ -403,18 +479,22 @@ if __name__ == "__main__":
 
     from rana import rana_func
 
-    configuration = {"pertubation_method": "Diagonal",
+    configuration = {"pertubation_method": "simple",
                      "x_length": 2,
                      "x_bounds": (-500, 500),
+                     "annealing_schedule": "simple_exponential_cooling",
                      "objective_function": rana_func,
-                     "annealing_schedule": "adaptive_cooling",
                      "maximum_archive_length": 100,
-                     "archive_minimum_acceptable_dissimilarity": 60,
+                     "archive_minimum_acceptable_dissimilarity": 0.2,
                      "maximum_markov_chain_length": 50,
                      "maximum_function_evaluations": 10000,
-                     "step_size_initialisation_fraction_of_range": 0.01,
-                     "bound_enforcing_method": "not_clipping"}
+                     "step_size_initialisation_fraction_of_range": 0.1,
+                     "bound_enforcing_method": "not_clipping",
+                     "cholesky_path_length": 5,
+                     }
+    np.random.seed(3)
     rana_2d_chol = SimulatedAnnealing(**configuration)
     x_result_chol, objective_result_chol = rana_2d_chol.run()
     print(f"x_result = {x_result_chol} \n objective_result = {objective_result_chol} \n "
           f"number of function evaluations = {rana_2d_chol.objective_function_evaluation_count}")
+    print(f"best objective result {rana_2d_chol.objective_history_array.min()}")

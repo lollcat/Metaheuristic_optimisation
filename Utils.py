@@ -7,17 +7,15 @@ def running_mean(x, N=100):
     return (cumsum[N:] - cumsum[:-N]) / float(N)
 
 
-def multiple_runs_with_different_seed(Class, class_argument, n_iterations=10, method="SE"):
+def multiple_runs_with_different_seed(Class, class_argument, n_iterations):
     results = []
     for i in range(n_iterations):
         np.random.seed(i)
         start_time = time.time()
         instantiated_class = Class(**class_argument)
         x_result, objective_result = instantiated_class.run()
-        if method == "SE":
-            results.append([objective_result, instantiated_class.objective_history_array.min(), time.time() - start_time])
-        elif method == "ES":
-            results.append(objective_result, instantiated_class.parent_objective_history_array.min())
+
+        results.append([objective_result, instantiated_class.objective_history_array.min(), time.time() - start_time])
     return np.array(results) # final result, minimal result, runtime
 
 """
