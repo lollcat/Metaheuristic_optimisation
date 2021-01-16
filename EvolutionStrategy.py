@@ -44,8 +44,6 @@ class EvolutionStrategy:
             self.parent_rotation_matrices = self.offspring_rotation_matrices[0:self.parent_number, :, :]    # just slice children for initialisation
             self.parent_covariance_matrices = self.offspring_covariance_matrices[0:self.parent_number, :, :]
 
-            self.parent_covariance_determinant_history = []
-            self.offspring_covariance_determinant_history = []
 
         elif mutation_method == "simple":
             self.standard_deviation_simple = mutation_covariance_initialisation_fraction_of_range*self.x_range
@@ -80,6 +78,8 @@ class EvolutionStrategy:
         self.parent_standard_deviation_history = []
         self.offspring_objective_history = []
         self.offspring_x_history = []
+        self.parent_covariance_determinant_history = []
+        self.offspring_covariance_determinant_history = []
 
     def objective_function(self, x):
         # interpolation done here to pass the objective function x correctly interpolated
@@ -98,7 +98,11 @@ class EvolutionStrategy:
                 self.update_archive(x, objective)
             self.parent_objective_history.append(self.parent_objectives)
             self.parent_x_history.append(self.parents)
-            if self.mutation_method == "diagonal" or self.mutation_method == "complex":
+            if self.mutation_method == "diagonal":
+                self.parent_standard_deviation_history.append(self.parent_mutation_standard_deviations)
+                self.parent_covariance_determinant_history.append(np.prod(self.parent_mutation_standard_deviations, axis=1))
+                self.offspring_covariance_determinant_history.append(np.prod(self.offspring_mutation_standard_deviations, axis=1))
+            elif self.mutation_method == "complex":
                 self.parent_standard_deviation_history.append(self.parent_mutation_standard_deviations)
                 self.parent_covariance_determinant_history.append(np.linalg.det(self.parent_covariance_matrices))
                 self.offspring_covariance_determinant_history.append(np.linalg.det(self.offspring_covariance_matrices))
@@ -367,9 +371,6 @@ class EvolutionStrategy:
             sigma_j[offspring_number, :, np.arange(self.x_length)] = stds
         self.offspring_covariance_matrices = np.tan(2 * self.offspring_rotation_matrices) * (sigma_i**2 - sigma_j**2) * 1/2
         self.offspring_covariance_matrices = np.clip(self.offspring_covariance_matrices, -np.minimum(sigma_i, sigma_j), np.minimum(sigma_i, sigma_j))
-        #self.offspring_covariance_matrices = np.clip(self.offspring_covariance_matrices,
-        #                                            -self.x_range*self.standard_deviation_clipping_fraction_of_range,
-         #                                           self.standard_deviation_clipping_fraction_of_range*self.x_range)
         self.offspring_covariance_matrices[:, np.arange(self.x_length), np.arange(self.x_length)] = self.offspring_mutation_standard_deviations
 
     @property
@@ -412,7 +413,7 @@ if __name__ == "__main__":
     from rana import rana_func
     Comp_config = {"objective_function": rana_func,
                    "x_bounds": (-500, 500),
-                   "x_length": 2,
+                   "x_length": 5,
                    "parent_number": 10,
                    "child_to_parent_ratio": 7,
                    "bound_enforcing_method": "not_clipping",

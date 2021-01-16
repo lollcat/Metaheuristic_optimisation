@@ -13,7 +13,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 
 
-def run(config,  Class=SimulatedAnnealing, n_runs=20):
+def run(config,  Class=SimulatedAnnealing, n_runs=30):
     dataframe = pd.DataFrame()
     results = multiple_runs_with_different_seed(Class=Class, class_argument=config, n_iterations=n_runs)
     mean_performance = np.mean(results[:, 1])
@@ -36,19 +36,19 @@ def run(config,  Class=SimulatedAnnealing, n_runs=20):
     config_result["std_perormance_final"] = std_perormance_final
 
     config_result["average_runtime"] = average_runtime
-    print("done")
+    print(config)
     return dataframe.append(config_result, ignore_index=True)
 
 
 if __name__ == "__main__":
-    #selection = "diagonal"
-    n_points = 50
+    n_points = 20
     #run_func = lambda config: run(config, Class=SimulatedAnnealing, n_runs=n_runs)
     #run_func = lambda x: print(x)
     chol_configs = []
     diag_configs = []
     sim_configs = []
-    annealing_alpha_z = list(np.linspace(0.5, 0.99, 10)) # list(1 - np.logspace(np.log(0.0001), 0.5, base=np.exp(1)))
+    update_step_size_when_not_accepted_interval_z = list(np.linspace(1, 60, n_points, dtype="int")) + [False]
+    annealing_alpha_z = list(np.linspace(0.5, 0.99, n_points)) # list(1 - np.logspace(np.log(0.0001), 0.5, base=np.exp(1)))
     maximum_markov_chain_length_z = list(np.logspace(np.log10(5), np.log10(2000), n_points, dtype="int"))
     for maximum_markov_chain_length in maximum_markov_chain_length_z:
         for annealing_alpha in annealing_alpha_z:
@@ -58,30 +58,16 @@ if __name__ == "__main__":
             Diag_config["annealing_alpha"] = annealing_alpha
             Simple_config["maximum_markov_chain_length"] = maximum_markov_chain_length
             Simple_config["annealing_alpha"] = annealing_alpha
+            for update_step_size_when_not_accepted_interval in update_step_size_when_not_accepted_interval_z:
+                Chol_config["update_step_size_when_not_accepted_interval"] = update_step_size_when_not_accepted_interval
+                Diag_config["update_step_size_when_not_accepted_interval"] = update_step_size_when_not_accepted_interval
 
-            chol_configs.append(Chol_config.copy())
-            diag_configs.append(Diag_config.copy())
+                chol_configs.append(Chol_config.copy())
+                diag_configs.append(Diag_config.copy())
             sim_configs.append(Simple_config.copy())
     with ProcessPoolExecutor() as executor:
         results = executor.map(run, chol_configs + diag_configs + sim_configs)
     results_list = list(results)
     with open(f"./Simulated_Annealing_Param_Opt/stored_data/alpha_markov_chain{time.time()}.pkl", "wb") as f:
         pickle.dump(results_list, f)
-    """    
-    if selection == "cholesky":
-        with ProcessPoolExecutor() as executor:
-            #results = executor.map(run_func, chol_configs)
-            results = executor.map(run, chol_configs)
-    elif selection == "diagonal":
-        with ProcessPoolExecutor() as executor:
-            results = executor.map(run, diag_configs)
-            #results = executor.map(run, diag_configs)
-    elif selection == "simple":
-        with ProcessPoolExecutor() as executor:
-            #results = executor.map(run_func, sim_configs)
-            results = executor.map(run, sim_configs)
-    results_list = list(results)
-    with open(f"./Simlated_Annealing_Notebooks/stored_data/{selection}alpha_markov_chain{time.time()}.pkl", "wb") as f:
-        pickle.dump(results_list, f)
-    print("done")
-    """
+

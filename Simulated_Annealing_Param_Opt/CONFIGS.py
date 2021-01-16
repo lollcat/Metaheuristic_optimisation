@@ -14,7 +14,7 @@ Chol_config = {"pertubation_method": "Cholesky",
                     }
 
 Simple_config = {"pertubation_method": "simple",
-                     "x_length": 2,
+                     "x_length": 5,
                      "x_bounds": (-500, 500),
                      "annealing_schedule":"simple_exponential_cooling",
                      "objective_function": rana_func,

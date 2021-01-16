@@ -20,8 +20,7 @@ class SimulatedAnnealing:
                  cholesky_path_length=5,
                  pertubation_alpha = 0.1, pertubation_omega = 2.1,
                  convergence_min_improvement = 1e-6,
-                 update_step_size_every_step = True,
-                 minimum_determinant = 1e-16,
+                 update_step_size_when_not_accepted_interval = 1,
                  ):
 
         self.x_length = x_length    # integer containing length of array x
@@ -34,7 +33,9 @@ class SimulatedAnnealing:
         self.acceptances_minimum_count = round(0.6 * maximum_markov_chain_length)   # 0.6 is a heuristic from lectures
         self.convergence_min_improvement = convergence_min_improvement
         self.convergence_evaluation_window = int(maximum_function_evaluations/10)
-        self.update_step_size_every_step = update_step_size_every_step
+        # this control the interval of step updates when the current pertubation is not accepted
+        # a value of 1 updates every step, a value of False only updates on acceptences
+        self.update_step_size_when_not_accepted_interval = update_step_size_when_not_accepted_interval
 
         # initialise archive and parameters determining how archive is managed
         self.archive = []   # list of (x, objective value) tuples
@@ -53,6 +54,7 @@ class SimulatedAnnealing:
         # initialise parameters related to annealing schedule
         self.temperature_history = []
         self.step_size_matrix_history = []
+        self.step_size_update_locations = []
         self.Markov_chain_length = 0    # initialise to 0
         self.acceptances_count = 0  # initialise to 0
         self.acceptances_total_count = 0    # initialise to 0
@@ -130,15 +132,17 @@ class SimulatedAnnealing:
                 self.acceptances_count += 1 # in current markov chain
                 self.acceptances_total_count += 1
                 self.iterations_without_acceptance = 0
-                if not self.update_step_size_every_step: # TODO see what is said in email
-                    self.update_step_size()
+                self.update_step_size()
             else:
                 self.iterations_without_acceptance += 1
+                # update according to folding interval
+                if self.update_step_size_when_not_accepted_interval is not False and \
+                        self.objective_function_evaluation_count % self.update_step_size_when_not_accepted_interval == 0:
+                    self.update_step_size()
             self.Markov_chain_length += 1
             self.iterations_total += 1
             done = self.temperature_scheduler()  # update temperature if need be
-            if self.update_step_size_every_step:
-                self.update_step_size()
+
             if self.with_restarts:
                 self.asses_restart()
             if self.restart_count > 5:
@@ -194,6 +198,7 @@ class SimulatedAnnealing:
             return False
 
     def update_step_size(self):
+        self.step_size_update_locations.append(self.objective_function_evaluation_count) # record when step size updates happened
         if self.pertubation_method == "simple":
             return
         elif self.pertubation_method == "Cholesky":
@@ -323,7 +328,8 @@ class SimulatedAnnealing:
                 """
                 self.temperature = self.temperature * self.alpha
             if np.isnan(self.temperature):
-                raise Exception("temperature is nan")
+                self.temperature = 1e-16
+                print("minimum temp reached")
             self.current_temperature_accepted_objective_values = []     # reset
             self.temperature_history.append([self.temperature, self.acceptances_total_count, self.objective_function_evaluation_count])
 
@@ -414,7 +420,8 @@ class SimulatedAnnealing:
                     del(self.archive[indx_to_remove - i])
 
 
-
+    # often it was conventient to store values in lists, however after the optimisation it is more convenient to have
+    # them as arrays, the below property methods are therefore given
     @property
     def temperature_history_array(self):
         return np.array(self.temperature_history)
@@ -442,6 +449,10 @@ class SimulatedAnnealing:
     @property
     def step_size_matrix_history_array(self):
         return np.array(self.step_size_matrix_history)
+
+    @property
+    def step_size_update_locations_array(self):
+        return np.array(self.step_size_update_locations)
 
     @property
     def probability_of_acceptance_history_array(self):
