@@ -10,8 +10,7 @@ Comp_config = {"objective_function": rana_func,
                 "standard_deviation_clipping_fraction_of_range" : 0.01,
                 "mutation_covariance_initialisation_fraction_of_range" : 0.01 ,
                 "mutation_method" : "complex",
-               "termination_min_abs_difference": 1e-6,
-              "maximum_archive_length": 100, "archive_minimum_acceptable_dissimilarity":0.1}
+               "termination_min_abs_difference": 1e-6}
 
 Diag_config = {"objective_function": rana_func,
                "x_bounds" : (-500, 500),
@@ -23,8 +22,7 @@ Diag_config = {"objective_function": rana_func,
                 "standard_deviation_clipping_fraction_of_range" : 0.01,
                 "mutation_covariance_initialisation_fraction_of_range" : 0.01 ,
                 "mutation_method" : "diagonal",
-               "termination_min_abs_difference": 1e-6,
-              "maximum_archive_length": 100, "archive_minimum_acceptable_dissimilarity":0.1}
+               "termination_min_abs_difference": 1e-6}
 
 Simple_config = {"objective_function": rana_func,
                "x_bounds" : (-500, 500),
@@ -36,5 +34,4 @@ Simple_config = {"objective_function": rana_func,
                 "standard_deviation_clipping_fraction_of_range" : 0.01,
                 "mutation_covariance_initialisation_fraction_of_range" : 0.01 ,
                 "mutation_method" : "simple",
-               "termination_min_abs_difference": 1e-6,
-              "maximum_archive_length": 100, "archive_minimum_acceptable_dissimilarity":0.1}
+               "termination_min_abs_difference": 1e-6}

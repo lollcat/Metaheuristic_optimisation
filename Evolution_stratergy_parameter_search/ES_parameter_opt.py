@@ -45,8 +45,8 @@ if __name__ == "__main__":
     n_points = 20
     #run_func = lambda config: run(config, Class=EvolutionStrategy, n_runs=n_runs)
     all_configs = []
-    number_of_offspring_z = np.linspace(20, 500, n_points, dtype="int")
-    child_to_parent_ratio_z = list(set(np.linspace(2, 20, n_points, dtype="int")))
+    number_of_offspring_z = np.linspace(20, 2000, n_points, dtype="int")
+    child_to_parent_ratio_z = list(set(np.linspace(2, 40, n_points, dtype="int")))
     selection_methods = ["standard_mew_comma_lambda", "elitist"]
     for selection_method in selection_methods:
         for number_of_offspring in number_of_offspring_z:

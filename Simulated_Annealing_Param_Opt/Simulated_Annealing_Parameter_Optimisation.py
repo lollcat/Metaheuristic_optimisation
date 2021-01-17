@@ -37,6 +37,7 @@ def run(config,  Class=SimulatedAnnealing, n_runs=30):
 
     config_result["average_runtime"] = average_runtime
     print(config)
+    print(f"result of {mean_performance_final}")
     return dataframe.append(config_result, ignore_index=True)
 
 

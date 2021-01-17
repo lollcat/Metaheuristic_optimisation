@@ -7,11 +7,11 @@ from Utils import multiple_runs_with_different_seed
 import numpy as np
 import pandas as pd
 from SimulatedAnealing import SimulatedAnnealing
-from rana import rana_func
+from rana import rana_func, Rosenbrock
 from concurrent.futures import ProcessPoolExecutor
 
 
-def run(config,  Class=SimulatedAnnealing, n_runs=2):
+def run(config,  Class=SimulatedAnnealing, n_runs=20):
     dataframe = pd.DataFrame()
     results = multiple_runs_with_different_seed(Class=Class, class_argument=config, n_iterations=n_runs)
     mean_performance = np.mean(results[:, 1])
@@ -35,6 +35,7 @@ def run(config,  Class=SimulatedAnnealing, n_runs=2):
 
     config_result["average_runtime"] = average_runtime
     print(config)
+    print(f"result of {mean_performance_final}")
     return dataframe.append(config_result, ignore_index=True)
 
 Optimal_config = {"pertubation_method": "Diagonal",
@@ -54,14 +55,30 @@ Optimal_config = {"pertubation_method": "Diagonal",
                     }
 
 if __name__ == "__main__":
-    df = pd.DataFrame()
-    max_dim = 10
-    all_configs = []
-    for dim in range(1, max_dim + 1):
-        Optimal_config["x_length"] = dim
-        all_configs.append(Optimal_config.copy())
-    with ProcessPoolExecutor() as executor:
-        results = executor.map(run, all_configs)
-    results_list = list(results)
-    with open(f"./Simulated_Annealing_Param_Opt/stored_data/many_dim{time.time()}.pkl", "wb") as f:
-        pickle.dump(results_list, f)
+    method = "both" # "Rosenbrock" # "Rana"
+    if method == "Rana" or "both":
+        df = pd.DataFrame()
+        max_dim = 10
+        all_configs = []
+        for dim in range(1, max_dim + 1):
+            Optimal_config["x_length"] = dim
+            all_configs.append(Optimal_config.copy())
+        with ProcessPoolExecutor() as executor:
+            results = executor.map(run, all_configs)
+        results_list = list(results)
+        with open(f"./Simulated_Annealing_Param_Opt/stored_data/many_dim{time.time()}.pkl", "wb") as f:
+            pickle.dump(results_list, f)
+    elif method == "Rosenbrock" or "both":
+        df = pd.DataFrame()
+        max_dim = 10
+        all_configs = []
+        Optimal_config["objective_function"] = Rosenbrock
+        for dim in range(1, max_dim + 1):
+            Optimal_config["x_length"] = dim
+            all_configs.append(Optimal_config.copy())
+        with ProcessPoolExecutor() as executor:
+            results = executor.map(run, all_configs)
+        results_list = list(results)
+        with open(f"./Simulated_Annealing_Param_Opt/stored_data/Rosenbrock__many_dim{time.time()}.pkl", "wb") as f:
+            pickle.dump(results_list, f)
+

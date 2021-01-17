@@ -7,7 +7,7 @@ class EvolutionStrategy:
                  selection_method="standard_mew_comma_lambda", mutation_method = "simple",
                  recombination_method="global",
                  termination_min_abs_difference=1e-6,
-                 maximum_archive_length=30, objective_count_maximum=10000,
+                 maximum_archive_length=None, objective_count_maximum=10000,
                  mutation_covariance_initialisation_fraction_of_range=0.01,
                  standard_deviation_clipping_fraction_of_range = 0.05,
                  bound_enforcing_method="not_clipping",
@@ -70,7 +70,7 @@ class EvolutionStrategy:
 
         # initialise archive and parameters determining how archive is managed
         self.archive = []   # list of (x, objective value) tuples
-        self.archive_maximum_length = maximum_archive_length
+        self.archive_maximum_length = maximum_archive_length    # If none then don't store, as slows program down slightly
         self.archive_minimum_acceptable_dissimilarity = archive_minimum_acceptable_dissimilarity
         self.archive_similar_dissimilarity = archive_minimum_acceptable_dissimilarity
         self.parent_objective_history = []
@@ -94,8 +94,9 @@ class EvolutionStrategy:
             self.generation_number += 1
             self.select_parents()
             #self.objective_history.append([self.parent_objectives.min(), self.parent_objectives.mean()])
-            for x, objective in zip(self.parents, self.parent_objectives):  # update archive
-                self.update_archive(x, objective)
+            if self.archive_maximum_length is not None: # if archive is None, then don't store
+                for x, objective in zip(self.parents, self.parent_objectives):  # update archive
+                    self.update_archive(x, objective)
             self.parent_objective_history.append(self.parent_objectives)
             self.parent_x_history.append(self.parents)
             if self.mutation_method == "diagonal":
@@ -300,14 +301,6 @@ class EvolutionStrategy:
             matrix += np.eye(self.x_length) * 1e-6 * 10**i
             return self.make_positive_definate(matrix, i=i+1)
 
-        """
-            matrix += np.eye(self.x_length) * 2e-1
-            try:
-                np.linalg.cholesky(matrix)
-                return matrix
-            except:
-                print("matrix unable to be made positive definate")
-        """
 
     def update_archive(self, x_new, objective_new):
         if len(self.archive) == 0:  # if empty then initialise with the first value
@@ -331,10 +324,11 @@ class EvolutionStrategy:
                 if True in similar_and_better:
                     self.archive[np.where(similar_and_better == True)[0][0]] = (x_new, objective_new)
         #if self.objective_function_evaluation_count % (int(self.objective_function_evaluation_max_count / 10)) == 0:
-        if self.generation_number % 5 == 0:
+        if self.generation_number % 10 == 0:
             # sometimes one value can like between 2 others, causing similarity even with the above loop
             # clean_archive fixes this
             # only need to do very rarely
+            # slows down program a lot, so only perform when we need to visualise 2D problem
             self.clean_archive()
 
     def clean_archive(self):
@@ -422,7 +416,7 @@ if __name__ == "__main__":
                    "mutation_covariance_initialisation_fraction_of_range": 0.01,
                    "mutation_method": "complex",
                    "termination_min_abs_difference": 1e-6,
-                   "maximum_archive_length": 100}
+                   "maximum_archive_length": 20}
     random_seed = 1
     np.random.seed(random_seed)
     x_max = 500

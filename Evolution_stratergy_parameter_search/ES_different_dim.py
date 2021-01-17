@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from EvolutionStrategy import EvolutionStrategy
 from concurrent.futures import ProcessPoolExecutor
-from rana import rana_func
+from rana import rana_func, Rosenbrock
 
 
 def run(config,  Class=EvolutionStrategy, n_runs=2):
@@ -36,6 +36,7 @@ def run(config,  Class=EvolutionStrategy, n_runs=2):
 
         config_result["average_runtime"] = average_runtime
         print(config)
+        print(f"result of {mean_performance_final}")
         return dataframe.append(config_result, ignore_index=True)
 
 Optimal_config = {"objective_function": rana_func,
@@ -48,18 +49,33 @@ Optimal_config = {"objective_function": rana_func,
                 "standard_deviation_clipping_fraction_of_range" : 0.01,
                 "mutation_covariance_initialisation_fraction_of_range" : 0.01 ,
                 "mutation_method" : "diagonal",
-               "termination_min_abs_difference": 1e-6,
-                  "maximum_archive_length": 100, "archive_minimum_acceptable_dissimilarity":0.1}
+               "termination_min_abs_difference": 1e-6}
 
 if __name__ == "__main__":
-    df = pd.DataFrame()
-    max_dim = 10
-    all_configs = []
-    for dim in range(1, max_dim + 1):
-        Optimal_config["x_length"] = dim
-        all_configs.append(Optimal_config.copy())
-    with ProcessPoolExecutor() as executor:
-        results = executor.map(run, all_configs)
-    results_list = list(results)
-    with open(f"./Evolution_stratergy_parameter_search/stored_data/many_dim{time.time()}.pkl", "wb") as f:
-        pickle.dump(results_list, f)
+    method = "Rosenbrock" # "Rana"
+    if method == "Rana" or method == "both":
+        df = pd.DataFrame()
+        max_dim = 10
+        all_configs = []
+        for dim in range(1, max_dim + 1):
+            Optimal_config["x_length"] = dim
+            all_configs.append(Optimal_config.copy())
+        with ProcessPoolExecutor() as executor:
+            results = executor.map(run, all_configs)
+        results_list = list(results)
+        with open(f"./Evolution_stratergy_parameter_search/stored_data/many_dim{time.time()}.pkl", "wb") as f:
+            pickle.dump(results_list, f)
+    if method == "Rosenbrock" or method == "both":
+        df = pd.DataFrame()
+        max_dim = 10
+        all_configs = []
+        Rosenbrock_config = Optimal_config.copy()
+        Rosenbrock_config["objective_function"] = Rosenbrock
+        for dim in range(1, max_dim + 1):
+            Rosenbrock_config["x_length"] = dim
+            all_configs.append(Rosenbrock_config.copy())
+        with ProcessPoolExecutor() as executor:
+            results = executor.map(run, all_configs)
+        results_list = list(results)
+        with open(f"./Evolution_stratergy_parameter_search/stored_data/Rosenbrockmany_dim{time.time()}.pkl", "wb") as f:
+            pickle.dump(results_list, f)

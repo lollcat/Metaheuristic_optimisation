@@ -1,5 +1,6 @@
 import numpy as np
 from rana import rana_func
+import time
 
 class random_search:
     def __init__(self, x_length, x_bounds= (-500, 500), objective_function=rana_func, n_evaluations=10000):
@@ -13,13 +14,17 @@ class random_search:
         self.objectives = np.apply_along_axis(func1d=self.objective_function, arr=self.all_points, axis=1)
         return self.objectives.min(), self.all_points[np.argmin(self.objectives), :]
 
-def run_with_multiple_seeds(dim, n_runs=20):
+def run_with_multiple_seeds(dim, func, n_runs=20):
     objective_func_list = []
+    runtimes = []
     for i in range(n_runs):
-        grid_searcher = random_search(dim)
+        start = time.time()
+        grid_searcher = random_search(dim, objective_function=func)
         min_objective, min_X = grid_searcher.run()
         objective_func_list.append(min_objective)
-    return np.mean(objective_func_list)
+        runtime = time.time() - start
+        runtimes.append(runtime)
+    return np.mean(objective_func_list), np.std(objective_func_list), np.mean(runtimes)
 
 
 
