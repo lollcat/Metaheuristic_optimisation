@@ -3,12 +3,11 @@ from collections import deque
 
 class SimulatedAnnealing:
     """
-    Currently assumes:
-        - interpolation is done inside objective_function wrapper function, elsewhere in the class x is
-        bounded between -1 and 1
-        - elements of x are all on the same scale
-    Notes:
-        Variable and function names written such that most of the code should be self-explanatory
+    x is transformed from the original bounds, to be bounded by (-1, 1)
+    Before outputs are given x is re-transformed back into the original form
+
+    This class includes methods (using restarts, adaptive cooling) that aren't explored
+    in the report for the sake of brevity
     """
     def __init__(self, x_length, x_bounds, objective_function,
                  pertubation_method="simple",
@@ -23,9 +22,9 @@ class SimulatedAnnealing:
                  update_step_size_when_not_accepted_interval = 1,
                  ):
 
-        self.x_length = x_length    # integer containing length of array x
-        self.x_bounds = x_bounds    # tuple containing bounds to x
-        self.x_range = 2    # when not interpolated (i.e. x bounded by -1 and 1)
+        self.x_length = x_length    # integer containing length/dimension of array x
+        self.x_bounds = x_bounds    # tuple containing the original bounds to x
+        self.x_range_internal = 2    # after being transformed to be between -1 and 1
         self.objective_function_raw = objective_function
         self.pertubation_method = pertubation_method
         self.annealing_schedule = annealing_schedule
@@ -33,34 +32,41 @@ class SimulatedAnnealing:
         self.acceptances_minimum_count = round(0.6 * maximum_markov_chain_length)   # 0.6 is a heuristic from lectures
         self.convergence_min_improvement = convergence_min_improvement
         self.convergence_evaluation_window = int(maximum_function_evaluations/10)
-        # this control the interval of step updates when the current pertubation is not accepted
-        # a value of 1 updates every step, a value of False only updates on acceptences
+        # bound enforcement allows for clipping to be used (speeding up the clipping, but introducing bias)
+        # the bound_enforcing_method is set to "not_clipping" throughout the report
+        self.bound_enforcing_method = bound_enforcing_method
+        # the below variable controls the "diversified-step-update-rule"
+        # i.e. how often the step-size control matrix is updated per number of iterations
+        # a value of 1 updates every step,
+        # a value of False only updates on acceptances (turns off the "step-update-rule")
         self.update_step_size_when_not_accepted_interval = update_step_size_when_not_accepted_interval
 
         # initialise archive and parameters determining how archive is managed
         self.archive = []   # list of (x, objective value) tuples
         self.archive_maximum_length = maximum_archive_length
         self.archive_minimum_acceptable_dissimilarity = archive_minimum_acceptable_dissimilarity
-        self.archive_similar_dissimilarity = archive_minimum_acceptable_dissimilarity #*0.1 # threshold for x values being considered as similar
+        self.archive_similar_dissimilarity = archive_minimum_acceptable_dissimilarity
 
+        # initialise histories and counters
+        # these are useful for inspecting the performance of the algorithm after a run
+        # and are used within the program (e.g. markov chain length)
         self.accepted_objective_history = []
         self.acceptences_locations = []
         self.accepted_x_history = []
         self.objective_history = []
         self.x_history = []
         self.alpha_history = []
-        self.iterations_without_acceptance = 0
-        self.bound_enforcing_method = bound_enforcing_method
-        # initialise parameters related to annealing schedule
         self.temperature_history = []
         self.step_size_matrix_history = []
         self.step_size_update_locations = []
-        self.Markov_chain_length = 0    # initialise to 0
-        self.acceptances_count = 0  # initialise to 0
+        self.probability_of_acceptance_history = []
+        self.iterations_without_acceptance = 0
+        self.Markov_chain_length_current = 0    # initialise to 0
+        self.acceptances_count_current_chain = 0  # initialise to 0
         self.acceptances_total_count = 0    # initialise to 0
         self.objective_function_evaluation_count = 0    # initialise to 0
-        self.iterations_total = 0  # initialise to 0
-        self.probability_of_acceptance_history = []
+
+        # option to restart the algorithm if no progress is made
         self.restart_count = 0
         self.max_iterations_without_acceptance_till_restart = int(maximum_function_evaluations/10)
         self.with_restarts = with_restarts
@@ -71,14 +77,14 @@ class SimulatedAnnealing:
         elif pertubation_method == "Cholesky" or "Diagonal":
             self.pertubation_alpha = pertubation_alpha
             self.pertubation_omega = pertubation_omega
-            self.recent_x_history = deque(maxlen=cholesky_path_length)#self.markov_chain_maximum_length)
+            self.recent_x_history = deque(maxlen=cholesky_path_length)  # used for local topology covariance
             if pertubation_method == "Cholesky":
                 self.step_size_control_matrix = (np.eye(x_length) *
-                                                step_size_initialisation_fraction_of_range*self.x_range)**2 # squared to cancel out sqrting
+                                                 step_size_initialisation_fraction_of_range * self.x_range_internal) ** 2
                 self.step_size_matrix = np.linalg.cholesky(self.step_size_control_matrix)
-            else:
+            else:  # Diagonal
                 self.step_size_matrix = np.eye(x_length) * \
-                                                step_size_initialisation_fraction_of_range * self.x_range     # initialise, this matrix controls step size
+                                        step_size_initialisation_fraction_of_range * self.x_range_internal
 
 
         if annealing_schedule == "simple_exponential_cooling":
@@ -90,14 +96,21 @@ class SimulatedAnnealing:
 
 
     def objective_function(self, x):
-        # interpolation done here to pass the objective function x correctly interpolated
+        """
+        Wrapper for the objective function calls, adding some extra functionality
+        """
         self.objective_function_evaluation_count += 1   # increment by one everytime objective function is called
-        x_interp = np.interp(x, [-1, 1], self.x_bounds)
+        x_interp = np.interp(x, [-1, 1], self.x_bounds) # interpolation done here to pass the objective function x correctly interpolated
         result = self.objective_function_raw(x_interp)
         return result
 
 
     def run(self):
+        """
+        This function run's the major steps of the Simulated Annealing algorithm
+        # major steps in the algorithm are surrounded with a #*******************************
+        # other parts of this function are merely storing histories, and updating counters
+        """
         # initialise x and temperature
         self.x_current = self.initialise_x()
         self.objective_current = self.objective_function(self.x_current)
@@ -107,42 +120,55 @@ class SimulatedAnnealing:
             self.recent_x_history.append(self.x_current)
         done = False    # initialise, done = True when the optimisation has completed
         while done is False:
+            # ***********************   PERTUBATION      ************************
             x_new = self.perturb_x(self.x_current)
+            # ********************************************************************
             objective_new = self.objective_function(x_new)
             delta_objective = objective_new - self.objective_current
             delta_x = x_new - self.x_current
             self.objective_history.append(objective_new)
             self.x_history.append(x_new)
+
+            # ******************    Asses Solution    ***************************
+            # accept change if there is an improvement, or probabilisticly (based on given temperature)
             if self.accept_x_update(delta_objective, delta_x):
+            # ********************************************************************
                 self.update_archive(x_new, objective_new)
-                # accept change if there is an improvement, or probabilisticly (based on given temperature)
-                if self.pertubation_method == "Cholesky":   # store recent x values to get covariance matrix
+                if self.pertubation_method == "Cholesky":
+                    # store recent x values used to calculate covariance matrix
                     self.recent_x_history.append(x_new)
                 elif self.pertubation_method == "Diagonal":
                     self.latest_accepted_step = x_new - self.x_current
 
-                self.x_current = x_new
+                self.x_current = x_new   # update x_current
                 self.objective_current = objective_new
                 if self.annealing_schedule == "adaptive_cooling":
                     # record accepted objective values in the current chain
-                    self.current_temperature_accepted_objective_values.append(self.objective_current)
+                    self.current_temperature_accepted_objective_values.append(
+                        self.objective_current)
                 self.accepted_objective_history.append([objective_new, self.objective_function_evaluation_count])
-                self.acceptences_locations.append(self.objective_function_evaluation_count)  # when in optimisation acceptence occured
+                self.acceptences_locations.append(self.objective_function_evaluation_count)
                 self.accepted_x_history.append(x_new)
-                self.acceptances_count += 1 # in current markov chain
+                self.acceptances_count_current_chain += 1 # in current markov chain
                 self.acceptances_total_count += 1
                 self.iterations_without_acceptance = 0
+                # **********************Update Step size ***************
                 self.update_step_size()
+                # ******************************************************
             else:
                 self.iterations_without_acceptance += 1
-                # update according to folding interval
+                # **********************diversified-step-update ***************
+                # update according to folding interval, using the diversified-step-update-rule
                 if self.update_step_size_when_not_accepted_interval is not False and \
                         self.objective_function_evaluation_count % self.update_step_size_when_not_accepted_interval == 0:
                     self.update_step_size()
-            self.Markov_chain_length += 1
-            self.iterations_total += 1
-            done = self.temperature_scheduler()  # update temperature if need be
-
+                # ******************************************************
+            self.Markov_chain_length_current += 1
+            # ***************  Update Temperature  *****************
+            # update temperature if need be
+            # also checks for convergence
+            done = self.temperature_scheduler()
+            # ******************************************************
             if self.with_restarts:
                 self.asses_restart()
             if self.restart_count > 5:
@@ -152,8 +178,10 @@ class SimulatedAnnealing:
         return np.interp(self.x_current, [-1, 1], self.x_bounds), self.objective_current
 
     def accept_x_update(self, delta_objective, delta_x):
+        """
+        returns True if the latest pertubation is accepted
+        """
         if delta_objective < 0:
-            #self.probability_of_acceptance_history.append([1, self.objective_function_evaluation_count])
             return True
         else:
             if self.pertubation_method == "Diagonal":
@@ -172,8 +200,8 @@ class SimulatedAnnealing:
 
     def initialise_temperature(self, x_current, objective_current, n_steps=60, average_accept_probability=0.8):
         """
-        Initialises system temperature
-        As all x's are initially accepted, x does a random walk, so changes in x are not returned
+        Initialises system temperature using Kirkpatrick method
+        As all x's are initially accepted, x does a random walk, so changes in x are discarded
         """
         objective_increase_history = []  # if many samples are taken then this could be changed to running average
         for step in range(1, n_steps+1):
@@ -198,24 +226,29 @@ class SimulatedAnnealing:
             return False
 
     def update_step_size(self):
-        self.step_size_update_locations.append(self.objective_function_evaluation_count) # record when step size updates happened
+        """
+        Update the matrix controlling the step size
+        """
+        # record when step size updates happened
+        self.step_size_update_locations.append(self.objective_function_evaluation_count)
         if self.pertubation_method == "simple":
-            return
+            return  # no update with the simple method
         elif self.pertubation_method == "Cholesky":
-            #covariance = np.cov([x_new, x_old], rowvar=False)
             covariance = np.cov(self.recent_x_history, rowvar=False)
-            covariance = np.clip(covariance, -self.x_range/2, self.x_range/2)   # prevent covariance from becoming too large
+            # prevent covariance from becoming too large by clipping
+            covariance = np.clip(covariance, -self.x_range_internal / 2, self.x_range_internal / 2)
             self.step_size_control_matrix = (1 - self.pertubation_alpha) * self.step_size_control_matrix + \
                                             self.pertubation_alpha * self.pertubation_omega * covariance
-            # conservative clipping
-            self.step_size_control_matrix = self.step_size_control_matrix.clip(-self.x_range*2, self.x_range*2)
+            # conservative clipping preventing step size control matrix from exploding or getting too small
+            self.step_size_control_matrix = self.step_size_control_matrix.clip(-self.x_range_internal * 2, self.x_range_internal * 2)
             i = 0
             while not self.is_positive_definate(self.step_size_control_matrix):
                 i += 1
                 self.step_size_control_matrix += np.eye(self.x_length)*1e-6*10**i  # to make positive definate
                 if i > 7:
                     raise Exception("couldn't get positive definate step size control matrix")
-            if np.linalg.det(self.step_size_matrix) < 1e-16: # double step size if determinant falls below 1e-6
+            if np.linalg.det(self.step_size_matrix) < 1e-16:
+                # increase step size if determinant falls below 1e-6
                 self.step_size_control_matrix = self.step_size_control_matrix * 1.1
                 # now have to enforce positive definateness again
                 while not self.is_positive_definate(self.step_size_control_matrix):
@@ -228,13 +261,15 @@ class SimulatedAnnealing:
 
         elif self.pertubation_method == "Diagonal":
 
-            self.step_size_matrix = (1-self.pertubation_alpha)*self.step_size_matrix + \
-                                   np.diag(self.pertubation_alpha*self.pertubation_omega*np.abs(self.latest_accepted_step))
-            # conservative clipping
-            self.step_size_matrix = np.clip(self.step_size_matrix, self.x_range * 1e-16, self.x_range*2)
+            self.step_size_matrix = \
+                (1-self.pertubation_alpha)*self.step_size_matrix + \
+                np.diag(self.pertubation_alpha*self.pertubation_omega*np.abs(self.latest_accepted_step))
+            # conservative clipping to prevent step size becoming too small or large
+            self.step_size_matrix = np.clip(self.step_size_matrix, self.x_range_internal * 1e-16, self.x_range_internal * 2)
 
-            if np.linalg.det(self.step_size_matrix) < 1e-16:  # double step size if determinant falls below 1e-6
-                self.step_size_matrix = self.step_size_matrix*2
+            if np.linalg.det(self.step_size_matrix) < 1e-16:
+            #  increase step size if determinant falls below 1e-6
+                self.step_size_matrix = self.step_size_matrix*1.1
             self.step_size_matrix_history.append(np.diag(self.step_size_matrix))
 
     def perturb_x(self, x):
@@ -247,7 +282,7 @@ class SimulatedAnnealing:
                 while max(x_new) > 1 or min(x_new) < -1:
                     indxs_breaking_bounds = np.where((x_new > 1) + (x_new < -1) == 1)
                     u_random_sample = np.random.uniform(low=-1, high=1, size=indxs_breaking_bounds[0].size)
-                    x_new[indxs_breaking_bounds] = x[indxs_breaking_bounds] + self.step_size_matrix * u_random_sample  # constant step size
+                    x_new[indxs_breaking_bounds] = x[indxs_breaking_bounds] + self.step_size_matrix * u_random_sample
 
 
         elif self.pertubation_method == "Cholesky":
@@ -265,12 +300,13 @@ class SimulatedAnnealing:
             if self.bound_enforcing_method == "clipping":
                 return np.clip(x_new, -1, 1)
             else:
-                while max(x_new) > 1 or min(x_new) < -1:
-                     #x_new = self.perturb_x(x)   # recursively call perturb until sampled within bounds
+                while max(x_new) > 1 or min(x_new) < -1: # only sample specific indices not within bounds
                     indxs_breaking_bounds = np.where((x_new > 1) + (x_new < -1) == 1)
                     u_random_sample = np.random.uniform(low=-1, high=1, size=indxs_breaking_bounds[0].size)
-                    x_new[indxs_breaking_bounds] = x[indxs_breaking_bounds] + np.diag(np.diag(self.step_size_matrix)[indxs_breaking_bounds])@u_random_sample
-
+                    x_new[indxs_breaking_bounds] = \
+                        x[indxs_breaking_bounds] + \
+                        np.diag(np.diag(self.step_size_matrix)[indxs_breaking_bounds])\
+                        @u_random_sample
         return x_new
 
 
@@ -293,54 +329,36 @@ class SimulatedAnnealing:
 
 
     def temperature_scheduler(self):
-        if self.Markov_chain_length > self.markov_chain_maximum_length or \
-                self.acceptances_count > self.acceptances_minimum_count:
-            #if len(self.current_temperature_accepted_objective_values) <= 1:
-             #   x_restart = self.archive_x[np.argmax(self.archive_f), :]
-             #   self.x_current = x_restart
-             #   print("restarted due to no accepted across chain")
-             #   self.restart_count += 1
+        if self.Markov_chain_length_current > self.markov_chain_maximum_length or \
+                self.acceptances_count_current_chain > self.acceptances_minimum_count:
             if self.annealing_schedule == "simple_exponential_cooling":
                 self.temperature = self.temperature * self.annealing_alpha
             elif self.annealing_schedule == "adaptive_cooling":
-                #raise Exception("incomplete code")
-
-                multiplier = (0.05 / 0.8) ** (1 / 10000)
-                desired_probability = 0.9*multiplier**self.objective_function_evaluation_count
-                length = int(self.markov_chain_maximum_length/2)
-                if self.probability_of_acceptance_history_array.shape[0] >  length:
-                    if np.mean(self.probability_of_acceptance_history_array[-length:, 0]) < desired_probability:
-                        self.alpha = 1.5
-                    else:
-                        self.alpha = 0.8
-                else:
-                    self.alpha = 0.95
-                self.alpha_history.append([self.alpha, self.objective_function_evaluation_count])
-
-                """
                 if len(self.current_temperature_accepted_objective_values) <= 1:
-                    self.alpha = 2
+                    # if no values have been accepted, then don't change alpha
+                    # algorithm most likely close to convergence
+                    self.alpha = 1
                     self.alpha_history.append([self.alpha, self.objective_function_evaluation_count])
                 else:
                     latest_temperature_standard_dev = np.std(self.current_temperature_accepted_objective_values)
+                    # use adaptive temperature rule
                     self.alpha = np.max([0.5, np.exp(-0.7*self.temperature/latest_temperature_standard_dev)])
                     self.alpha_history.append([self.alpha, self.objective_function_evaluation_count])
-                """
                 self.temperature = self.temperature * self.alpha
             if np.isnan(self.temperature):
                 self.temperature = 1e-16
                 print("minimum temp reached")
             self.current_temperature_accepted_objective_values = []     # reset
             self.temperature_history.append([self.temperature, self.acceptances_total_count, self.objective_function_evaluation_count])
-
-            self.Markov_chain_length = 0    # restart counter
-            self.acceptances_count = 0  # restart counter
+            self.Markov_chain_length_current = 0    # restart counter
+            self.acceptances_count_current_chain = 0  # restart counter
         done = self.get_halt()
         if done is True:
+            # add final values to make plotting histories easier
             self.temperature_history.append(
                 [self.temperature, self.acceptances_total_count, self.objective_function_evaluation_count])
             self.accepted_objective_history.append([self.objective_current, self.objective_function_evaluation_count])
-            self.acceptences_locations.append(self.objective_function_evaluation_count) # when in optimisation acceptence occured
+            self.acceptences_locations.append(self.objective_function_evaluation_count)
             self.accepted_x_history.append(self.x_current)
         return done
 
@@ -365,9 +383,11 @@ class SimulatedAnnealing:
             else:  # caclulate diffrence between max and min over window
                 earliest_acceptence_indx_over_window = acceptence_indx_over_window[0]
                 best_accepted_value_over_recent_window = \
-                    np.max(self.accepted_objective_history_array[earliest_acceptence_indx_over_window:, 0])
+                    np.max(self.accepted_objective_history_array
+                           [earliest_acceptence_indx_over_window:, 0])
                 worst_accepted_value_over_recent_window = \
-                    np.min(self.accepted_objective_history_array[earliest_acceptence_indx_over_window:, 0])
+                    np.min(self.accepted_objective_history_array
+                           [earliest_acceptence_indx_over_window:, 0])
 
                 if best_accepted_value_over_recent_window - worst_accepted_value_over_recent_window < \
                         self.convergence_min_improvement:
@@ -419,8 +439,8 @@ class SimulatedAnnealing:
                     # deletions changes indexes so we have to adjust by i each time
                     del(self.archive[indx_to_remove - i])
 
-
-    # often it was conventient to store values in lists, however after the optimisation it is more convenient to have
+    # often it was conventient to store values in lists
+    # however after the optimisation it is more convenient to have
     # them as arrays, the below property methods are therefore given
     @property
     def temperature_history_array(self):
@@ -480,18 +500,14 @@ class SimulatedAnnealing:
             theta_history.append(list(min_thetas[order]))
         return np.array(eigen_values_history), np.array(theta_history)
 
-
-
-
-
-
 if __name__ == "__main__":
+    # simple example run with rana 5D rana function
     np.random.seed(0)
 
     from rana import rana_func
 
     configuration = {"pertubation_method": "simple",
-                     "x_length": 2,
+                     "x_length": 5,
                      "x_bounds": (-500, 500),
                      "annealing_schedule": "simple_exponential_cooling",
                      "objective_function": rana_func,

@@ -11,7 +11,7 @@ from concurrent.futures import ProcessPoolExecutor
 from rana import rana_func, Rosenbrock
 
 
-def run(config,  Class=EvolutionStrategy, n_runs=2):
+def run(config,  Class=EvolutionStrategy, n_runs=20):
         dataframe = pd.DataFrame()
         results = multiple_runs_with_different_seed(Class=Class, class_argument=config, n_iterations=n_runs,
                                                     method="ES")
@@ -42,20 +42,20 @@ def run(config,  Class=EvolutionStrategy, n_runs=2):
 Optimal_config = {"objective_function": rana_func,
                "x_bounds" : (-500, 500),
                 "x_length" : 5,
-                "parent_number" : 23,
-                "child_to_parent_ratio" : 11,
+                "parent_number" : 59,
+                "child_to_parent_ratio" : 8,
                 "bound_enforcing_method" : "not_clipping" ,
-                "selection_method" :  "standard_mew_comma_lambda" ,
-                "standard_deviation_clipping_fraction_of_range" : 0.01,
+                "selection_method" :  "elitist" ,
+                "standard_deviation_clipping_fraction_of_range" : 0.02,
                 "mutation_covariance_initialisation_fraction_of_range" : 0.01 ,
                 "mutation_method" : "diagonal",
                "termination_min_abs_difference": 1e-6}
 
 if __name__ == "__main__":
-    method = "Rosenbrock" # "Rana"
+    method = "Rana"  # "Rosenbrock" # "Rana"
     if method == "Rana" or method == "both":
         df = pd.DataFrame()
-        max_dim = 10
+        max_dim = 20
         all_configs = []
         for dim in range(1, max_dim + 1):
             Optimal_config["x_length"] = dim

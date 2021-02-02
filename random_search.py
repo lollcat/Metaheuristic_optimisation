@@ -1,6 +1,6 @@
 import numpy as np
 from rana import rana_func
-import time
+
 
 class random_search:
     def __init__(self, x_length, x_bounds= (-500, 500), objective_function=rana_func, n_evaluations=10000):
@@ -14,6 +14,8 @@ class random_search:
         self.objectives = np.apply_along_axis(func1d=self.objective_function, arr=self.all_points, axis=1)
         return self.objectives.min(), self.all_points[np.argmin(self.objectives), :]
 
+
+import time
 def run_with_multiple_seeds(dim, func, n_runs=20):
     objective_func_list = []
     runtimes = []

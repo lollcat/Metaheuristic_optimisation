@@ -55,10 +55,10 @@ Optimal_config = {"pertubation_method": "Diagonal",
                     }
 
 if __name__ == "__main__":
-    method = "both" # "Rosenbrock" # "Rana"
+    method = "Rana"  # "both" # "Rosenbrock" # "Rana"
     if method == "Rana" or "both":
         df = pd.DataFrame()
-        max_dim = 10
+        max_dim = 20
         all_configs = []
         for dim in range(1, max_dim + 1):
             Optimal_config["x_length"] = dim

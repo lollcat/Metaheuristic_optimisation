@@ -2,6 +2,10 @@ import numpy as np
 
 
 class EvolutionStrategy:
+    """
+    x is transformed from the original bounds, to be bounded by (-1, 1)
+    Before outputs are given x is re-transformed back into the original form
+    """
     def __init__(self, x_length, x_bounds, objective_function, archive_minimum_acceptable_dissimilarity=0.1,
                  parent_number=10,
                  selection_method="standard_mew_comma_lambda", mutation_method = "simple",
@@ -15,7 +19,7 @@ class EvolutionStrategy:
         self.x_length = x_length
         self.x_bounds = x_bounds
         self.bound_enforcing_method = bound_enforcing_method
-        self.x_range = 2  # from -1 to 1 when interpolated
+        self.x_range = 2  # after being transformed to be between -1 and 1
         self.objective_function_raw = objective_function
         self.selection_method = selection_method
         self.mutation_method = mutation_method
@@ -24,24 +28,26 @@ class EvolutionStrategy:
 
         # prevent standard deviations from becoming too large (clip relative to size of range)
         self.standard_deviation_clipping_fraction_of_range = standard_deviation_clipping_fraction_of_range
-
         self.parent_number = parent_number
-        self.offspring_number = parent_number * child_to_parent_ratio  # parent to offspring ratio from slides (Schwefel 1987)
+        self.offspring_number = parent_number * child_to_parent_ratio
 
         if mutation_method == "complex":
             # Mutation parameters - taken from slides, recommended by (Schwefel 1987)
             self.mutation_tau = 1/np.sqrt(2*np.sqrt(self.x_length))
             self.mutation_tau_dash = 1/np.sqrt(2*self.x_length)
             self.mutation_Beta = 0.0873
-            self.offspring_mutation_standard_deviations = np.ones((self.offspring_number, self.x_length)) * \
-                                                          mutation_covariance_initialisation_fraction_of_range * self.x_range
-            self.parent_mutation_standard_deviations = np.ones((self.parent_number, self.x_length)) * \
-                                                       mutation_covariance_initialisation_fraction_of_range * self.x_range
+            self.offspring_mutation_standard_deviations = \
+                np.ones((self.offspring_number, self.x_length)) * \
+                mutation_covariance_initialisation_fraction_of_range * self.x_range
+            self.parent_mutation_standard_deviations = \
+                np.ones((self.parent_number, self.x_length)) * \
+                mutation_covariance_initialisation_fraction_of_range * self.x_range
 
             self.offspring_rotation_matrices = np.broadcast_to(np.eye(self.x_length), (self.offspring_number, self.x_length, self.x_length))
 
             self.make_covariance_matrix()
-            self.parent_rotation_matrices = self.offspring_rotation_matrices[0:self.parent_number, :, :]    # just slice children for initialisation
+            # just slice children for initialisation
+            self.parent_rotation_matrices = self.offspring_rotation_matrices[0:self.parent_number, :, :]
             self.parent_covariance_matrices = self.offspring_covariance_matrices[0:self.parent_number, :, :]
 
 
@@ -51,21 +57,17 @@ class EvolutionStrategy:
         elif mutation_method == "diagonal":
             self.mutation_tau = 1 / np.sqrt(2 * np.sqrt(self.x_length))
             self.mutation_tau_dash = 1 / np.sqrt(2 * self.x_length)
-            self.offspring_mutation_standard_deviations = np.ones((self.offspring_number, self.x_length)) * \
-                                                          mutation_covariance_initialisation_fraction_of_range * self.x_range
-            self.parent_mutation_standard_deviations = np.ones((self.parent_number, self.x_length)) * \
-                                                mutation_covariance_initialisation_fraction_of_range * self.x_range
+            self.offspring_mutation_standard_deviations = \
+                np.ones((self.offspring_number, self.x_length)) * \
+                mutation_covariance_initialisation_fraction_of_range * self.x_range
+            self.parent_mutation_standard_deviations = np.ones((self.parent_number, self.x_length)) * mutation_covariance_initialisation_fraction_of_range * self.x_range
 
-
-
-        self.parents = np.zeros((self.parent_number, self.x_length))    # zeros not used, this just shows the shape of the array representing the parents
-        self.parent_objectives = np.zeros(self.parent_number)   # initialise to zeros to show the shape
-        self.offspring = np.zeros((self.offspring_number, self.x_length))    # initialise to zeros to show shape
+        # initialise parents and offspring
+        # zeros aren't ever used, just specifies the shapes of the arrays
+        self.parents = np.zeros((self.parent_number, self.x_length))
+        self.parent_objectives = np.zeros(self.parent_number)
+        self.offspring = np.zeros((self.offspring_number, self.x_length))
         self.offspring_objectives = np.zeros(self.offspring_number)
-
-        self.objective_function_evaluation_count = 0  # initialise
-        self.generation_number = 0
-        self.objective_function_evaluation_max_count = objective_count_maximum
 
 
         # initialise archive and parameters determining how archive is managed
@@ -73,6 +75,10 @@ class EvolutionStrategy:
         self.archive_maximum_length = maximum_archive_length    # If none then don't store, as slows program down slightly
         self.archive_minimum_acceptable_dissimilarity = archive_minimum_acceptable_dissimilarity
         self.archive_similar_dissimilarity = archive_minimum_acceptable_dissimilarity
+
+        # initialise histories and counters
+        # these are useful for inspecting the performance of the algorithm after a run
+        # and are used within the program (e.g. markov chain length)
         self.parent_objective_history = []
         self.parent_x_history = []
         self.parent_standard_deviation_history = []
@@ -80,33 +86,54 @@ class EvolutionStrategy:
         self.offspring_x_history = []
         self.parent_covariance_determinant_history = []
         self.offspring_covariance_determinant_history = []
+        self.objective_function_evaluation_count = 0  # initialise
+        self.generation_number = 0
+        self.objective_function_evaluation_max_count = objective_count_maximum
 
     def objective_function(self, x):
+        """
+        Wrapper for the objective function calls, adding some extra functionality
+        """
+        # increment by one everytime objective function is called
+        self.objective_function_evaluation_count += 1
         # interpolation done here to pass the objective function x correctly interpolated
-        self.objective_function_evaluation_count += 1   # increment by one everytime objective function is called
         x_interp = np.interp(x, [-1, 1], self.x_bounds)
         result = self.objective_function_raw(x_interp)
         return result
 
     def run(self):
+        """
+        This function run's the major steps of the Evolution Strategy algorithm
+        # major steps in the algorithm are surrounded with a #*******************************
+        # other parts of this function are more organisation (e.g. storing histories)
+        """
         self.initialise_random_population()
         while True:  # loop until termination criteria is reached
             self.generation_number += 1
+            # **************************   Selection *******************
             self.select_parents()
-            #self.objective_history.append([self.parent_objectives.min(), self.parent_objectives.mean()])
+            # **************************************************************
             if self.archive_maximum_length is not None: # if archive is None, then don't store
                 for x, objective in zip(self.parents, self.parent_objectives):  # update archive
                     self.update_archive(x, objective)
             self.parent_objective_history.append(self.parent_objectives)
             self.parent_x_history.append(self.parents)
             if self.mutation_method == "diagonal":
-                self.parent_standard_deviation_history.append(self.parent_mutation_standard_deviations)
-                self.parent_covariance_determinant_history.append(np.prod(self.parent_mutation_standard_deviations, axis=1))
-                self.offspring_covariance_determinant_history.append(np.prod(self.offspring_mutation_standard_deviations, axis=1))
+                self.parent_standard_deviation_history.append\
+                    (self.parent_mutation_standard_deviations)
+                self.parent_covariance_determinant_history.append(
+                    np.prod(self.parent_mutation_standard_deviations, axis=1))
+                self.offspring_covariance_determinant_history.append(
+                    np.prod(self.offspring_mutation_standard_deviations, axis=1))
             elif self.mutation_method == "complex":
-                self.parent_standard_deviation_history.append(self.parent_mutation_standard_deviations)
-                self.parent_covariance_determinant_history.append(np.linalg.det(self.parent_covariance_matrices))
-                self.offspring_covariance_determinant_history.append(np.linalg.det(self.offspring_covariance_matrices))
+                self.parent_standard_deviation_history.append(
+                    self.parent_mutation_standard_deviations)
+                self.parent_covariance_determinant_history.append(
+                    np.linalg.det(self.parent_covariance_matrices))
+                self.offspring_covariance_determinant_history.append(
+                    np.linalg.det(self.offspring_covariance_matrices))
+
+            # *************  Check for convergence/termination      ************
             # ensure termination before 10000 iterations
             if self.objective_function_evaluation_count > self.objective_function_evaluation_max_count-self.offspring_number:
                 print("max total iterations")
@@ -116,8 +143,11 @@ class EvolutionStrategy:
             if max(self.parent_objectives) - min(self.parent_objectives) < self.termination_min_abs_difference:
                 print("converged")
                 break
-
+            # ****************************************************************
+            # *********************   Create Offspring ********************
+            # I.e. perform recombination and mutation to create offspring
             self.create_new_offspring()
+            # ************************************************************
             self.offspring_objective_history.append(self.offspring_objectives)
             self.offspring_x_history.append(self.offspring)
 
@@ -135,7 +165,8 @@ class EvolutionStrategy:
 
     def select_parents(self):
         if self.selection_method == "standard_mew_comma_lambda":
-            # choose top values in linear time (np.argpartition doesn't sort top values amongst themselves)
+            # choose top values in linear time
+            # np.argpartition doesn't sort top values amongst themselves so is compuationally faster
             pool_objectives = self.offspring_objectives
             pool = self.offspring
             if self.mutation_method == "diagonal":
@@ -182,15 +213,18 @@ class EvolutionStrategy:
 
 
     def create_new_offspring(self):
-        # recombination
+        """
+        Recombination and Mutation
+        """
+        #****************   Recombination   ********************************
+        # global discrete recombination for control parameters
+        # global intermediate recombination for stratergy parameters
         if self.recombination_method == "global":
             # for each element in each child, inherit from a random parent
             child_recombination_indxs = np.random.choice(self.parent_number, replace=True,
                                            size = (self.offspring_number, self.x_length))
             offspring_pre_mutation = self.parents[child_recombination_indxs, np.arange(self.x_length)]
             if self.mutation_method == "diagonal" or self.mutation_method == "complex":
-                #  offspring_pre_mutation_standard_deviation = self.parent_mutation_standard_deviations[
-                #     child_recombination_indxs, np.arange(self.x_length)]
                 child_stratergy_recombination_indxs = np.random.choice(self.parent_number, replace=True,
                                            size=(self.offspring_number,  self.x_length, 2))
                 offspring_pre_mutation_standard_deviation = \
@@ -199,9 +233,8 @@ class EvolutionStrategy:
                     0.5*self.parent_mutation_standard_deviations[
                         child_stratergy_recombination_indxs[:, :, 1], np.arange(self.x_length)]
                 if self.mutation_method == "complex":
-                    child_stratergy_recombination_indxs = np.random.choice(self.parent_number, replace=True,
-                                                                           size=(
-                                                                           self.offspring_number*self.x_length*self.x_length, 2))
+                    child_stratergy_recombination_indxs = \
+                        np.random.choice(self.parent_number, replace=True, size=(self.offspring_number*self.x_length*self.x_length, 2))
                     slices1 = np.broadcast_to(np.arange(self.x_length)[np.newaxis, :], (self.x_length, self.x_length)).flatten()
                     slices1 = np.broadcast_to(slices1[np.newaxis, :], (self.offspring_number, self.x_length**2)).flatten()
                     slices2 = np.broadcast_to(np.arange(self.x_length)[:, np.newaxis], (self.x_length, self.x_length)).flatten()
@@ -214,8 +247,7 @@ class EvolutionStrategy:
                             child_stratergy_recombination_indxs[:, 1], slices1,
                             slices2], (self.offspring_number, self.x_length, self.x_length))
 
-
-        # mutation
+        #****************   Mutation   ********************************
         if self.mutation_method == "simple":
             u_random_sample = np.random.normal(loc=0, scale=self.standard_deviation_simple,
                                                size=offspring_pre_mutation.shape)
@@ -233,13 +265,12 @@ class EvolutionStrategy:
         elif self.mutation_method == "diagonal":  # non spherical covariance
             self.offspring_mutation_standard_deviations = \
                 offspring_pre_mutation_standard_deviation * \
-                np.exp(
-                        self.mutation_tau_dash*np.broadcast_to(
+                np.exp(self.mutation_tau_dash*np.broadcast_to(
                             np.random.normal(0, 1, size=(self.offspring_number, 1)), self.offspring_mutation_standard_deviations.shape)
-                           + self.mutation_tau*np.random.normal(
-                                               0, 1, size=self.offspring_mutation_standard_deviations.shape))
-            self.offspring_mutation_standard_deviations = np.clip(self.offspring_mutation_standard_deviations,
-                                                                  1e-8, self.standard_deviation_clipping_fraction_of_range*self.x_range)
+                           + self.mutation_tau*np.random.normal(0, 1, size=self.offspring_mutation_standard_deviations.shape))
+            self.offspring_mutation_standard_deviations = \
+                np.clip(self.offspring_mutation_standard_deviations,
+                        1e-8, self.standard_deviation_clipping_fraction_of_range*self.x_range)
 
             u_random_sample = np.random.normal(loc=0, scale=self.offspring_mutation_standard_deviations,
                                                size=offspring_pre_mutation.shape)
@@ -249,31 +280,23 @@ class EvolutionStrategy:
             else:
                 while np.max(x_new) > 1 or np.min(x_new) < -1:
                     indxs_breaking_bounds = np.where((x_new > 1) + (x_new < -1) == 1)
-                    u_random_sample = np.random.normal(loc=0, scale=self.offspring_mutation_standard_deviations[indxs_breaking_bounds],
-                                                       size=indxs_breaking_bounds[0].size)
+                    u_random_sample = \
+                        np.random.normal(loc=0, scale=self.offspring_mutation_standard_deviations
+                        [indxs_breaking_bounds],size=indxs_breaking_bounds[0].size)
                     x_new[indxs_breaking_bounds] = offspring_pre_mutation[indxs_breaking_bounds] + u_random_sample
 
         if self.mutation_method == "complex":
             self.offspring_mutation_standard_deviations = \
                 offspring_pre_mutation_standard_deviation  * \
-                np.exp(
-                        self.mutation_tau_dash*np.broadcast_to(
+                np.exp(self.mutation_tau_dash*np.broadcast_to(
                             np.random.normal(0, 1, size=(self.offspring_number, 1)), self.offspring_mutation_standard_deviations.shape)
-                           + self.mutation_tau*np.random.normal(
-                                               0, 1, size=self.offspring_mutation_standard_deviations.shape))
+                           + self.mutation_tau*np.random.normal(0, 1, size=self.offspring_mutation_standard_deviations.shape))
 
-            self.offspring_mutation_standard_deviations = np.clip(self.offspring_mutation_standard_deviations,
-                                                                  1e-8,
-                                                                  self.standard_deviation_clipping_fraction_of_range * self.x_range)
+            self.offspring_mutation_standard_deviations = \
+                np.clip(self.offspring_mutation_standard_deviations, 1e-8,
+                self.standard_deviation_clipping_fraction_of_range * self.x_range)
 
             self.offspring_rotation_matrices = offspring_pre_mutation_rotation_matrix + self.mutation_Beta * np.random.normal(0, 1, size=(self.offspring_rotation_matrices.shape))
-            #self.offspring_rotation_matrices = self.offspring_rotation_matrices/np.broadcast_to(np.linalg.det(self.offspring_rotation_matrices)[:, np.newaxis, np.newaxis], (self.offspring_number, self.x_length, self.x_length))
-            #self.offspring_rotation_matrices = np.clip(self.offspring_rotation_matrices, -np.pi/4, np.pi/4)
-
-            # rotation_matrix = 1/2*np.arctan(2 * np.divide(self.mutation_covariance,
-            #                                               np.einsum("ij,jk->ik",
-            #                                                         self.mutation_standard_deviations[:, np.newaxis] ** 2,
-            #                                                         -self.mutation_standard_deviations[np.newaxis, :] ** 2)))
             for i in range(self.offspring_number):
                 self.offspring_rotation_matrices[i, :, :] = np.tril(self.offspring_rotation_matrices[i, :, :], k=-1) - np.tril(
                     self.offspring_rotation_matrices[i, :, :], k=-1).T      # make symmetric
@@ -323,7 +346,6 @@ class EvolutionStrategy:
                                                for i in range(len(self.archive))])
                 if True in similar_and_better:
                     self.archive[np.where(similar_and_better == True)[0][0]] = (x_new, objective_new)
-        #if self.objective_function_evaluation_count % (int(self.objective_function_evaluation_max_count / 10)) == 0:
         if self.generation_number % 10 == 0:
             # sometimes one value can like between 2 others, causing similarity even with the above loop
             # clean_archive fixes this
@@ -367,6 +389,9 @@ class EvolutionStrategy:
         self.offspring_covariance_matrices = np.clip(self.offspring_covariance_matrices, -np.minimum(sigma_i, sigma_j), np.minimum(sigma_i, sigma_j))
         self.offspring_covariance_matrices[:, np.arange(self.x_length), np.arange(self.x_length)] = self.offspring_mutation_standard_deviations
 
+    # often it was conventient to store values in lists
+    # however after the optimisation it is more convenient to have
+    # them as arrays, the below property methods are therefore given
     @property
     def parent_objective_history_array(self):
         return np.array(self.parent_objective_history)
@@ -404,6 +429,7 @@ class EvolutionStrategy:
 
 
 if __name__ == "__main__":
+    # example run on the 5 D rana problem
     from rana import rana_func
     Comp_config = {"objective_function": rana_func,
                    "x_bounds": (-500, 500),
@@ -426,42 +452,3 @@ if __name__ == "__main__":
     print(f"x_result = {x_result} \n objective_result = {objective_result}\n\n\n\
           number of objective_evaluations is {evo_comp.objective_function_evaluation_count}\
           number of generations is {evo_comp.generation_number}")
-    evo_comp.clean_archive()
-
-    """
-    test = "rana"
-    import matplotlib.pyplot as plt
-    if test == "rana":  # rana function
-        from rana import rana_func
-        x_max = 500
-        x_min = -x_max
-        rana_2d = EvolutionStrategy(x_length=2, x_bounds=(x_min, x_max), objective_function=rana_func,
-                                    standard_deviation_fraction_of_range=0.001,
-                                    archive_minimum_acceptable_dissimilarity=20)
-        x_result, objective_result = rana_2d.run()
-        plt.plot(rana_2d.objective_history)
-        plt.show()
-
-    if test == 0:   # simplest objective
-        x_max = 50
-        x_min = -x_max
-        simple_objective = lambda x: x + np.sin(x)*20 + 3
-        simple_evolve = EvolutionStrategy(x_length=1, x_bounds=(x_min, x_max), objective_function=simple_objective,
-                                          standard_deviation_fraction_of_range=0.05,
-                                          archive_minimum_acceptable_dissimilarity=5)
-        x_result, objective_result = simple_evolve.run()
-        print(f"x_result = {x_result} \n objective_result = {objective_result}")
-
-        archive_x = np.array([x_archive for x_archive, f_archive in simple_evolve.archive])
-        archive_f = np.array([f_archive for x_archive, f_archive in simple_evolve.archive])
-
-
-        x_linspace = np.linspace(x_min, x_max, 200)
-        plt.plot(x_linspace, simple_objective(x_linspace))
-        plt.plot(x_result, objective_result, "or")
-        plt.plot(archive_x, archive_f, "xr")
-        plt.show()
-
-        plt.plot(simple_evolve.objective_history)
-        plt.show()
-"""

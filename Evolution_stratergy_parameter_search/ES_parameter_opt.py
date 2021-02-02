@@ -11,7 +11,7 @@ from Evolution_stratergy_parameter_search.CONFIGS import Comp_config, Diag_confi
 from concurrent.futures import ProcessPoolExecutor
 
 
-def run(config,  Class=EvolutionStrategy, n_runs=20):
+def run(config,  Class=EvolutionStrategy, n_runs=30):
         dataframe = pd.DataFrame()
         results = multiple_runs_with_different_seed(Class=Class, class_argument=config, n_iterations=n_runs,
                                                     method="ES")
@@ -42,16 +42,16 @@ def run(config,  Class=EvolutionStrategy, n_runs=20):
 if __name__ == "__main__":
     df = pd.DataFrame()
     #n_runs = 2
-    n_points = 20
+    n_points = 30
     #run_func = lambda config: run(config, Class=EvolutionStrategy, n_runs=n_runs)
     all_configs = []
-    number_of_offspring_z = np.linspace(20, 2000, n_points, dtype="int")
-    child_to_parent_ratio_z = list(set(np.linspace(2, 40, n_points, dtype="int")))
+    number_of_offspring_z = np.linspace(20, 4000, n_points, dtype="int")
+    child_to_parent_ratio_z = list(set(np.linspace(2, 200, n_points, dtype="int")))
     selection_methods = ["standard_mew_comma_lambda", "elitist"]
     for selection_method in selection_methods:
         for number_of_offspring in number_of_offspring_z:
             for child_to_parent_ratio in child_to_parent_ratio_z:
-                parent_number = int(number_of_offspring/child_to_parent_ratio)
+                parent_number = max(int(number_of_offspring/child_to_parent_ratio), 1)
                 Comp_config["parent_number"] = parent_number
                 Comp_config["selection_method"] = selection_method
                 Comp_config["child_to_parent_ratio"] = child_to_parent_ratio
